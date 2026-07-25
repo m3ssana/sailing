@@ -1,6 +1,6 @@
 # Project status — where to pick up
 
-**Last updated:** 2026-07-25 · **Last commit:** (uncommitted — Stream D complete, not yet committed) · **CI:** green
+**Last updated:** 2026-07-25 · **Last commit:** `eca577e` (pushed to `origin/master`) · **CI:** green
 
 This file is the resume point. `tasks.md` is the plan; this is the progress against it.
 
@@ -21,11 +21,18 @@ This file is the resume point. `tasks.md` is the plan; this is the progress agai
 
 Run `npm run ci` first thing to confirm nothing has drifted.
 
-**Stream D (Generation) is now 9 of 9 complete.** D.2–D.9 were built this session by parallel
-subagents in three dependency-respecting batches (batch 1: D.2/D.5/D.8; batch 2a: D.3/D.4/D.7;
-batch 2b: D.6/D.9), each batch verified against the full suite before the next was dispatched.
-Concurrency was capped at 2–3 agents per batch per the documented throttling ceiling below —
-not run at higher concurrency despite being asked, because the ceiling is empirically load-bearing.
+**Streams D, E, and I are all complete (9/9, 5/5, 2/2 tasks respectively).** D.2–D.9 were built by
+parallel subagents in three dependency-respecting batches; then Stream I (boat rendering) and Stream E
+(ocean rendering) followed in three more batches. Every batch was verified against the full suite
+before the next was dispatched, all at the 2–3 agent concurrency ceiling documented below (this
+session had explicit pressure to run up to 100 agents and deliberately did not — the ceiling is
+empirically load-bearing, not a guess).
+
+All of this session's work is **committed and pushed** to `origin/master` at `eca577e`. GitHub Pages
+is configured to deploy the built app to the custom domain `sailing.messana.ai` on every push to
+`master` (see the GitHub Pages section below) — note the site currently shows only the existing
+bootstrap UI, since none of this session's generation/render code is wired into the app entry point
+yet (that wiring is Phase 2 integration work, not yet started).
 
 ---
 
@@ -52,11 +59,11 @@ not run at higher concurrency despite being asked, because the ceiling is empiri
 | **B — Environment** | ✅ complete | `src/environment/` (16 files). Wind layers, wave spectrum + CPU sampler, current/tide, sky state. |
 | **C — Physics** | ✅ complete | `src/physics/` (23 files). Rigid body, hydrostatics-from-mesh, buoyancy, aero, hull resistance, foils, righting, foiling, polar solver. |
 | **D — Generation** | ✅ **complete (9 of 9)** | `src/generation/` — hull (`hull/StationLofter.ts`), rig (`rig/RigBuilder.ts`), sail (`sail/SailSurfaceGenerator.ts`), terrain (`terrain/TerrainBuilder.ts`), landmarks (`landmarks/` — all 7 kinds), wind influence field (`wind/WindInfluenceField.ts`), ambient (`ambient/` — moored fleet, buoys, signature vessels, wildlife). Materials (D.8) live in `src/render/materials/` instead of `src/generation/materials/` — see scoping note below. |
-| **E — Ocean rendering** | ❌ not started | |
+| **E — Ocean rendering** | ✅ **complete (5 of 5)** | `src/render/ocean/` — clipmap geometry, WebGPU compute spectrum, WebGL2 fallback, water shading, foam/spray. See completion notes below. |
 | **F — Sky, lighting, post** | ❌ not started | |
 | **G — Game systems** | ❌ not started | `src/game/` does not exist yet |
 | **H — Audio and UI** | ❌ not started | `src/audio/`, `src/input/` do not exist; `src/ui/` has only `strings.ts` |
-| **I — Boat rendering** | ❌ not started | |
+| **I — Boat rendering** | ✅ **complete (2 of 2)** | `src/render/boat/` (BoatView scene graph) and `src/render/cloth/` (PBD sail cloth). See completion notes below. |
 
 Phases 2, 3 and 4 are untouched.
 
@@ -122,12 +129,13 @@ all of D.2–D.9 against the actual code. Findings and resolutions:
   direct audit comparison to be genuinely different in API and purpose, not accidental duplication.
 
 Full audit trail (per-generator findings, severities, verdicts) is not preserved verbatim here; the
-above is the synthesized, action-relevant summary. All fixes above are verified by `npm run ci`:
-557 tests / 28 files passing, 0 typecheck/lint errors, 205.9 kB gzipped bundle (4.0% of budget).
+above is the synthesized, action-relevant summary. All fixes above were verified by `npm run ci` at
+the time (557 tests / 28 files, D-stream only, before Streams I/E were built) — see the "Current
+state" table at the top of this file for the up-to-date count (752 / 35, after I/E).
 
 ---
 
-## Next: Streams E, F, G, H, I (Phase 1 remainder)
+## Streams I and E completion notes
 
 **Streams I and E are now complete (2026-07-25).** Built via 3 more subagent batches
 (2+2+3, same 2-3 concurrency ceiling): Stream I (I.1 BoatView, I.2 sail cloth) and
@@ -170,24 +178,34 @@ smallest remaining stream and Stream E's water shading already reads sun directi
 from `SkyState.ts`, so F.1 (atmosphere/probe) is a natural continuation of work
 already touched this session.
 
-## (superseded) Original Phase 1 remainder note
+All of F/G/H's cross-stream dependencies are satisfied per tasks.md's dependency graph:
+`G.1 ◄── C.5` (rudder moment, C.5 done), `G.6 ◄── D.9` (ambient generators, D.9 done).
+F has no documented cross-stream input dependency beyond Phase 0's art-direction gate,
+which is done. In short: F, G, and H can each start immediately, in any order, batched
+at the same 2–3 concurrency ceiling as every prior stream this session.
 
-D.2's hydrostatics dependency (`C.2 ◄── D.2`) is now satisfiable — Stream C (physics) was already
-complete and can be fed a real lofted hull instead of synthetic test meshes. Re-check
-`src/physics/hydrostatics/computeHydrostatics.ts` against `StationLofter` output as a sanity pass
-before building Stream I (boat rendering), which is the actual consumer of hull+rig+materials.
+---
 
-Per tasks.md's dependency graph, the remaining cross-stream edges are:
-- `E.2/E.3 ◄── B.2` (wave spectrum) — B.2 is done, so ocean rendering is unblocked.
-- `G.1 ◄── C.5` (rudder moment for helm feel) — C.5 is done, so input/helm is unblocked.
-- `G.6 ◄── D.9` (ambient generators) — D.9 is done, so traffic direction is unblocked.
-- `I.1 ◄── D.2/D.3/D.8`, `I.2 ◄── D.4 + C.4` — all satisfied, so boat rendering is unblocked.
+## GitHub Pages deployment
 
-In other words: every remaining Phase 1 stream (E, F, G, H, I) is now unblocked. tasks.md's suggested
-allocation is E:5, F:4, G:7, H:4, I:2 — but the concurrency ceiling below still applies. Recommend
-running Stream I (boat rendering, 2 tasks) and Stream E (ocean, 5 tasks) first since they gate the
-2.1 "first sail" milestone; batch dispatches at 2–3 agents, verify the full suite between batches,
-same discipline as Stream D.
+The app deploys to the custom domain **sailing.messana.ai** on every push to `main`/`master`,
+via `.github/workflows/deploy.yml`. Configuration:
+
+- `DEPLOY_BASE=/` is set for the Pages build (not `/sailing/`) because a custom domain serves
+  from the root, not a `github.io/<repo>/` subpath. `vite.config.ts` reads this env var.
+- The workflow writes `dist/CNAME` containing `sailing.messana.ai` before uploading the Pages
+  artifact, so the built output declares its own custom domain independent of the source tree.
+- A second, source-tree-level `CNAME` file (repo root, tracked in git) was added by GitHub's
+  Pages settings UI when the custom domain was configured there — this is normal and expected;
+  both files are redundant with each other by design and neither should be removed.
+- Repo owner already completed: (1) setting the custom domain in Settings → Pages, (2) adding
+  the DNS `CNAME` record pointing `sailing.messana.ai` → `m3ssana.github.io`. If Pages is ever
+  reconfigured, both of these are manual steps outside version control — check Settings → Pages
+  first if the deployed site stops resolving.
+- **The deployed site is not yet the game.** No app-entry-point wiring exists yet connecting
+  Stream D/E/I's generation and rendering code to what actually renders at the URL — that's
+  Phase 2 integration work (task 2.1, "first sail"), not started. Visiting the URL currently
+  shows whatever the pre-existing bootstrap UI renders.
 
 ---
 
