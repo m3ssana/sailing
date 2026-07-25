@@ -56,9 +56,11 @@ declare module 'three/webgpu' {
 
   export class Color {
     constructor(color?: number | string);
+    constructor(r: number, g: number, b: number);
     r: number;
     g: number;
     b: number;
+    set(color: number | string): this;
   }
 
   export class Vector3 {
@@ -76,10 +78,42 @@ declare module 'three/webgpu' {
     z: number;
   }
 
+  export class Quaternion {
+    constructor(x?: number, y?: number, z?: number, w?: number);
+    x: number;
+    y: number;
+    z: number;
+    w: number;
+    set(x: number, y: number, z: number, w: number): this;
+    copy(q: Quaternion): this;
+    slerpQuaternions(qa: Quaternion, qb: Quaternion, t: number): this;
+  }
+
   export class Object3D {
     position: Vector3;
     rotation: Euler;
+    quaternion: Quaternion;
+    visible: boolean;
+    children: Object3D[];
     add(...objects: Object3D[]): this;
+    removeFromParent(): this;
+  }
+
+  export class Group extends Object3D {}
+
+  export class BufferAttribute {
+    constructor(array: ArrayLike<number>, itemSize: number, normalized?: boolean);
+    array: ArrayLike<number>;
+    itemSize: number;
+    needsUpdate: boolean;
+  }
+
+  export class Float32BufferAttribute extends BufferAttribute {
+    constructor(array: ArrayLike<number> | number, itemSize: number, normalized?: boolean);
+  }
+
+  export class Uint32BufferAttribute extends BufferAttribute {
+    constructor(array: ArrayLike<number> | number, itemSize: number, normalized?: boolean);
   }
 
   export class Scene extends Object3D {
@@ -95,7 +129,11 @@ declare module 'three/webgpu' {
     lookAt(x: number, y: number, z: number): void;
   }
 
-  export class BufferGeometry {}
+  export class BufferGeometry {
+    setAttribute(name: string, attribute: BufferAttribute): this;
+    setIndex(index: BufferAttribute | number[]): this;
+    dispose(): void;
+  }
 
   export class PlaneGeometry extends BufferGeometry {
     constructor(width?: number, height?: number, widthSegments?: number, heightSegments?: number);
@@ -145,11 +183,30 @@ declare module 'three/webgpu' {
     sizeNode: ShaderNode | null;
   }
 
-  export class Mesh extends Object3D {
-    constructor(geometry?: BufferGeometry, material?: Material);
+  export class Texture {
+    needsUpdate: boolean;
+    dispose(): void;
   }
 
-  export class Light extends Object3D {}
+  export class DataTexture extends Texture {
+    constructor(
+      data?: Float32Array | Uint8Array | null,
+      width?: number,
+      height?: number,
+    );
+    readonly image: { data: Float32Array | Uint8Array; width: number; height: number };
+  }
+
+  export class Mesh extends Object3D {
+    constructor(geometry?: BufferGeometry, material?: Material);
+    geometry: BufferGeometry;
+    material: Material;
+  }
+
+  export class Light extends Object3D {
+    color: Color;
+    intensity: number;
+  }
 
   export class DirectionalLight extends Light {
     constructor(color?: number, intensity?: number);
@@ -157,6 +214,12 @@ declare module 'three/webgpu' {
 
   export class AmbientLight extends Light {
     constructor(color?: number, intensity?: number);
+  }
+
+  export class PointLight extends Light {
+    constructor(color?: number, intensity?: number, distance?: number, decay?: number);
+    distance: number;
+    decay: number;
   }
 
   interface WebGPURendererBackend {
@@ -210,7 +273,7 @@ declare module 'three/tsl' {
     normalize(): TSLNode;
     saturate(): TSLNode;
     pow(exponent: number | TSLNode): TSLNode;
-    mix(other: TSLNode, factor: TSLNode | number): TSLNode;
+    mix(other: TSLNode | number, factor: TSLNode | number): TSLNode;
     abs(): TSLNode;
     sign(): TSLNode;
     floor(): TSLNode;
@@ -222,7 +285,12 @@ declare module 'three/tsl' {
     cos(): TSLNode;
   }
 
-  export function Fn(fn: () => TSLNode): () => TSLNode;
+  /** A TSL function created via Fn(). Callable with TSLNode arguments. */
+  interface TSLFn {
+    (...args: (TSLNode | number)[]): TSLNode;
+  }
+
+  export function Fn(fn: (args: TSLNode[]) => TSLNode): TSLFn;
   export function float(value: number): TSLNode;
   export function vec2(x: number | TSLNode, y?: number | TSLNode): TSLNode;
   export function vec3(x: number | TSLNode, y?: number | TSLNode, z?: number | TSLNode): TSLNode;

@@ -26,3 +26,17 @@ export {
 } from './common/meshUtils';
 export { BoxGenerator } from './common/BoxGenerator';
 export type { BoxParams } from './common/BoxGenerator';
+export { TerrainBuilder } from './terrain/TerrainBuilder';
+export { StationLofter } from './hull/StationLofter';
+export { generateWindInfluenceField } from './wind/WindInfluenceField';
+export type { WindInfluenceFieldParams, WindInfluenceFieldResult } from './wind/WindInfluenceField';
+export { MooredFleetGenerator } from './ambient/MooredFleet';
+export type { MooredFleetParams } from './ambient/MooredFleet';
+export { NavigationBuoyGenerator } from './ambient/NavigationBuoy';
+export type { NavigationBuoyParams, BuoyKind } from './ambient/NavigationBuoy';
+export { HarbourFurnitureGenerator } from './ambient/HarbourFurniture';
+export type { HarbourFurnitureParams, FurnitureKind } from './ambient/HarbourFurniture';
+export { SignatureVesselGenerator } from './ambient/SignatureVessels';
+export type { SignatureVesselParams, SignatureVesselKind } from './ambient/SignatureVessels';
+export { WildlifeGenerator } from './ambient/Wildlife';
+export type { WildlifeParams, WildlifeKind } from './ambient/Wildlife';

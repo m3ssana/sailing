@@ -2,6 +2,8 @@
 
 A stylized 3D sailing simulator where wind, waves, and sky match the real current weather at real venues worldwide.
 
+**🌊 [Play at sailing.messana.ai](https://sailing.messana.ai)**
+
 > **Status: early development.** The foundation is in place — types, math, build tooling, CI/CD — but the simulator is not yet playable. See the [spec](.kiro/specs/sailing-game/) for the full design intent.
 
 ## What is this?

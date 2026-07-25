@@ -1,7 +1,8 @@
 # Deploy to GitHub Pages on push to main/master.
 #
-# The Vite config reads DEPLOY_BASE to set the base path for the deployed build.
-# GitHub Pages serves the repo at /<repo-name>/, so links and assets resolve correctly.
+# Served from the custom domain sailing.messana.ai (see the CNAME step below),
+# so the Vite build uses the root base path, not the /<repo-name>/ subpath
+# GitHub's default *.github.io URL would need.
 
 name: Deploy to GitHub Pages
 
@@ -37,7 +38,10 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          DEPLOY_BASE: '/sailing/'
+          DEPLOY_BASE: '/'
+
+      - name: Add custom domain CNAME
+        run: echo 'sailing.messana.ai' > dist/CNAME
 
       - uses: actions/configure-pages@v5
 
