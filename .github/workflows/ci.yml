@@ -1,0 +1,45 @@
+# Continuous integration — runs on every push and pull request.
+#
+# Performance benchmarks and visual regression tests are deliberately LOCAL-ONLY
+# gates. CI runners are software-rendered with no real GPU, so frame-time and
+# pixel-comparison tests would be meaningless here. Run `npm run ci` on your own
+# machine with a discrete GPU for the full gate set.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: No imported assets
+        run: npm run no-assets
+
+      - name: Bundle budget
+        run: npm run budget

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="A stylized 3D sailing simulator where the wind, waves and sky match the real weather at sailing venues around the world."
+    />
+    <title>Sailing</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        /* Instrument-panel UI language: high contrast, restrained colour. */
+        --ink: #e8eef2;
+        --ink-dim: #8fa3b0;
+        --sea: #0b1c26;
+        --accent: #4fd1c5;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--sea);
+        color: var(--ink);
+        font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      #canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        touch-action: none;
+      }
+      #ui-root {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+      }
+      #ui-root > * {
+        pointer-events: auto;
+      }
+      #boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        gap: 1rem;
+        text-align: center;
+        font-variant-numeric: tabular-nums;
+      }
+      #boot h1 {
+        font-size: 1.25rem;
+        font-weight: 500;
+        letter-spacing: 0.35em;
+        text-transform: uppercase;
+        margin: 0;
+      }
+      #boot p {
+        margin: 0;
+        color: var(--ink-dim);
+        font-size: 0.8rem;
+        font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas" aria-label="Sailing simulation viewport" role="img"></canvas>
+    <div id="ui-root"></div>
+    <div id="boot" role="status" aria-live="polite">
+      <h1>Sailing</h1>
+      <p id="boot-status">initialising renderer…</p>
+    </div>
+    <noscript>
+      <p>This simulator requires JavaScript and a WebGPU- or WebGL2-capable browser.</p>
+    </noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
