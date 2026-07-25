@@ -1,5 +1,7 @@
 # Sailing
 
+![Sailing on Tampa Bay](docs/images/readme-hero.jpg)
+
 A stylized 3D sailing simulator where wind, waves, and sky match the real current weather at real venues worldwide.
 
 **🌊 [Play at sailing.messana.ai](https://sailing.messana.ai)**
