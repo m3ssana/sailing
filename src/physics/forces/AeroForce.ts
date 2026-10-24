@@ -219,10 +219,24 @@ export class AeroForce implements ForceGenerator {
 
       // Lift is perpendicular to apparent wind, in the horizontal plane.
       // Drag is parallel to apparent wind direction.
-      // Lift direction: rotate windNorm 90° in the waterplane.
-      // (perpendicular in the XZ plane, sign based on which side of the sail)
+      //
+      // Lift direction: rotate the (normalised) apparent-wind direction 90° in
+      // the waterplane, with the rotation SENSE chosen so lift drives the boat
+      // FORWARD and heels it to LEEWARD.
+      //
+      // BUG FIX (first exercised when AeroForce was wired into BoatSimulation
+      // for Phase 2 task 2.1 — the whole sail-force path had never run through
+      // the integrator before, see tests/unit/physics/forceAccumulation.test.ts).
+      // The previous sense, `liftDir = rot+90°(windNorm) * sign(awaRaw)`, pointed
+      // lift AFT: on a beam reach (wind FROM north, heading east, apparent wind
+      // flowing towards +Z) it produced a lift vector of (−1,0,0) = astern, so
+      // `drive = dot(force, forward)` came out NEGATIVE and the boat sailed
+      // backwards and capsized. The physically correct perpendicular is the
+      // −90° rotation (windNorm.z, −windNorm.x), which for that case gives
+      // (+1,0,0) = forward and heels to leeward. This is a pure sign/convention
+      // fix; magnitudes are unchanged. Regression: AeroForce drive-sign test.
       const liftSign = Math.sign(awaRaw) || 1;
-      set3(_liftDir, -_windNorm.z * liftSign, 0, _windNorm.x * liftSign);
+      set3(_liftDir, _windNorm.z * liftSign, 0, -_windNorm.x * liftSign);
 
       // Drag direction: along apparent wind (the wind pushes the boat).
       set3(_dragDir, _windNorm.x, 0, _windNorm.z);

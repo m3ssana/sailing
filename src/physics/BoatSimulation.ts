@@ -43,8 +43,6 @@ import {
   isStateFinite,
   accumulateForces,
   resetForcePool,
-  getForceCount,
-  getForcePoolSlice,
 } from './RigidBody';
 import { integrateLinear, integrateAngularRK4 } from './Integrator';
 
@@ -120,8 +118,13 @@ export class BoatSimulationImpl implements IBoatSimulation {
     // ── 1. Apply actuator rate limits
     this._applyActuatorRateLimits(dt);
 
-    // ── 2. Reset force pool
+    // ── 2. Reset force pool AND the per-step force list.
+    // The force pool is an allocation buffer for generators that use
+    // `allocForce()`; `this._forces` is the actual list of forces to integrate
+    // (the `out` parameter every generator pushes into). It MUST be cleared each
+    // step or forces accumulate across steps without bound.
     resetForcePool();
+    this._forces.length = 0;
 
     // ── 3. Compute apparent wind at the rig's centre of effort
     this._computeApparentWind(environment, time);
@@ -150,9 +153,15 @@ export class BoatSimulationImpl implements IBoatSimulation {
     rotateVec3(this.state.orientation, this.spec.centreOfMass, _worldCoM);
     addScaled3(_worldCoM, this.state.position, 1);
 
+    // Accumulate from `this._forces` — the list every generator pushed into.
+    // (Pool-allocated forces are pushed into this same list, so this counts
+    // both pool-based and literal-pushing generators; the previous code read
+    // only the pool via getForcePoolSlice/getForceCount and silently dropped
+    // every force a generator pushed as an object literal — e.g. AeroForce,
+    // FoilLift, HydroResistance, RightingMoment, none of which use the pool.)
     accumulateForces(
-      getForcePoolSlice(),
-      getForceCount(),
+      this._forces,
+      this._forces.length,
       _worldCoM,
       _netForce,
       _netTorque,
