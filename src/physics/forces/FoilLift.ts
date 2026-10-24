@@ -112,9 +112,22 @@ export class FoilLift implements ForceGenerator {
       const liftMag = q * Math.abs(cl);
       const dragMag = q * cd;
 
-      // Lift acts perpendicular to the velocity direction in the horizontal plane.
-      // It opposes the leeway (pushes the boat back toward its heading).
-      const liftSign = -Math.sign(cl); // Opposes leeway
+      // Lift acts perpendicular to the velocity direction in the horizontal
+      // plane. It must OPPOSE the leeway — push the boat back toward its heading.
+      //
+      // leeway = heading − velHeading. A boat slipping to STARBOARD has velHeading
+      // > heading → leeway < 0 → alpha < 0 → cl < 0 (symmetric foil, cl = slope·α).
+      // To counter a starboard slip the foil must push to PORT, i.e. along
+      // −rightDir. With cl < 0 we need liftVec = −rightDir, so the sign is
+      // +sign(cl) (which is −1 here), NOT −sign(cl).
+      //
+      // BUG FIX: the previous `liftSign = −sign(cl)` pointed the lift to the SAME
+      // side as the drift, so the daggerboard AMPLIFIED leeway instead of
+      // resisting it — the boat crabbed off downwind at 50–70° leeway and could
+      // never hold a course (verified: at 9° starboard leeway the foil pushed
+      // +792 N to starboard when it should pull to port). Regression:
+      // foilOpposesLeeway test.
+      const liftSign = Math.sign(cl) || 1; // Opposes leeway (restores to heading).
       set3(_liftVec, _rightDir.x * liftSign, 0, _rightDir.z * liftSign);
 
       // Drag opposes motion.

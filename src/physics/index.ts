@@ -3,6 +3,11 @@ export { WaveDragForceGenerator } from './forces/WaveDrag';
 export { AeroForce } from './forces/AeroForce';
 export type { SailAeroState } from './forces/AeroForce';
 export { HydroResistance, ittc57, froudeNumber } from './forces/HydroResistance';
+export {
+  HydrodynamicDampingForceGenerator,
+  DINGHY_HYDRO_DAMPING,
+} from './forces/HydrodynamicDamping';
+export type { HydrodynamicDampingConfig } from './forces/HydrodynamicDamping';
 export { FoilLift } from './forces/FoilLift';
 export { RightingMoment } from './forces/RightingMoment';
 export { FoilFlight } from './forces/FoilFlight';

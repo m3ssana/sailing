@@ -20,6 +20,7 @@ import type { VenueDefinition } from '@/types';
 import type { WeatherService } from '@/types';
 import { PHYSICS_CONSTANTS } from '@/types';
 import { createWindField } from './wind';
+import type { TerrainInfluenceField } from './wind';
 import { createCurrentField } from './CurrentField';
 import { computeSkyStateForVenue, createSkyState } from './SkyState';
 
@@ -29,6 +30,16 @@ export interface EnvironmentConfig {
   seed: Seed;
   /** External wave field (owned by another agent). If absent, a flat stub is used. */
   waveField?: WaveField;
+  /**
+   * Optional generated wind influence (terrain) field. When provided it is
+   * forwarded to `createWindField` so the venue's lee/gap/bend wind effects
+   * modulate the base forecast; when absent the wind layer uses its neutral
+   * identity field (no spatial influence), exactly as before. Purely additive
+   * and backward compatible. `WindInfluenceFieldResult` (from
+   * `@generation/wind/WindInfluenceField`) structurally matches this type, so a
+   * venue can pass its generated field straight through.
+   */
+  terrainField?: TerrainInfluenceField;
   /** Depth field callback. If absent, uniform depth from venue.maxDepth is used. */
   depthAt?: (x: number, z: number) => Metres;
   /** Land query callback. If absent, everything is water. */
@@ -94,11 +105,16 @@ export function createEnvironment(config: EnvironmentConfig): Environment {
   const snapshot = weatherService.snapshot;
   const sessionStartEpochMs = config.sessionStartEpochMs ?? snapshot.fetchedAt;
 
-  // Wind field.
+  // Wind field. Forward the generated terrain influence field when provided so
+  // the venue's lee/gap/bend wind effects modulate the forecast (createWindField
+  // falls back to its neutral identity field when it is absent). Conditional
+  // spread keeps the property absent (not `undefined`) under
+  // exactOptionalPropertyTypes.
   const wind: WindField = createWindField({
     weatherService,
     seed,
     windProfile: venue.windProfile,
+    ...(config.terrainField !== undefined ? { terrainField: config.terrainField } : {}),
   });
 
   // Wave field (stub if not provided).

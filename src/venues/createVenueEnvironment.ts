@@ -6,30 +6,21 @@
  *   1. builds the headless terrain (→ `depthAt` / `isLand`);
  *   2. generates the wind influence field from the same coastline geometry;
  *   3. wraps the snapshot in a {@link WeatherServiceImpl};
- *   4. calls the frozen {@link createEnvironment}.
+ *   4. calls the frozen {@link createEnvironment}, INJECTING the generated wind
+ *      influence field through `EnvironmentConfig.terrainField`.
  *
- * ## CONTRACT GAP (reported, adapted in this layer — not papered over)
+ * ## Former contract gap — now CLOSED
  *
- * `EnvironmentConfig` (src/environment/Environment.ts) has NO field for a wind
- * influence / terrain field. Internally `createEnvironment` always builds its
- * wind field via `createWindField({ weatherService, seed, windProfile })` with
- * no `terrainField`, so it uses the neutral identity terrain field. There is
- * therefore no supported way to feed the generated `WindInfluenceFieldResult`
- * into the Environment through the frozen config.
- *
- * We adapt in the venues layer rather than editing the frozen type:
- *   - we still call `createEnvironment` for the full, correct Environment
- *     (wind/waves/current/sky/depth/land), AND
- *   - we ALSO generate the wind influence field and return it alongside, so a
- *     caller (or a later Environment extension) can consume it. The field's
- *     structural type (`WindInfluenceFieldResult`) already matches the
- *     `TerrainInfluenceField` the wind layer accepts, so the only missing piece
- *     is an `EnvironmentConfig.terrainField` passthrough.
- *
- * RECOMMENDATION for whoever owns src/environment: add an optional
- * `terrainField?: TerrainInfluenceField` to `EnvironmentConfig` and forward it to
- * `createWindField`. That is a purely additive change to a non-frozen file
- * (Environment.ts is implementation, not in src/types), and it is the clean fix.
+ * `EnvironmentConfig` (src/environment/Environment.ts) previously had no field
+ * for a wind influence / terrain field, so the generated `WindInfluenceFieldResult`
+ * could not reach the Environment and was merely returned alongside, unconsumed.
+ * `EnvironmentConfig` now carries an optional, backward-compatible
+ * `terrainField?: TerrainInfluenceField` that `createEnvironment` forwards to
+ * `createWindField`; `WindInfluenceFieldResult` structurally matches that type,
+ * so we pass the generated field straight through here. The venue's lee/gap/bend
+ * wind effects now modulate the simulated wind. The field is STILL also returned
+ * in `windInfluence` (the return shape is unchanged) for the render layer and
+ * tests.
  */
 
 import type { Environment, Seed } from '@/types';
@@ -49,9 +40,9 @@ export interface VenueEnvironment {
   /** The built terrain (heightfield, land mask, samplers). */
   terrain: VenueTerrain;
   /**
-   * The generated wind influence field. NOT yet consumed by `environment`
-   * (see the contract-gap note at the top of this file); exposed so a caller or
-   * a future Environment extension can wire it in.
+   * The generated wind influence field. It is now INJECTED into `environment`
+   * (via `EnvironmentConfig.terrainField`) so it modulates the simulated wind,
+   * AND exposed here for the render layer and tests.
    */
   windInfluence: WindInfluenceFieldResult;
 }
@@ -105,11 +96,17 @@ export function createVenueEnvironment(
   // 3. Wrap the snapshot in a WeatherService.
   const weatherService = new WeatherServiceImpl(weatherSnapshot, venue.windProfile.fetch);
 
-  // 4. Call the frozen createEnvironment with venue wind/tide/current/depth.
+  // 4. Call the frozen createEnvironment with venue wind/tide/current/depth, now
+  //    INJECTING the generated wind influence field through the additive
+  //    `EnvironmentConfig.terrainField` passthrough (its structural type matches
+  //    the wind layer's `TerrainInfluenceField`), so the venue's lee/gap/bend
+  //    wind effects reach the Environment's wind field. (This closes the former
+  //    contract gap — the field used to be returned alongside, unconsumed.)
   const environment = createEnvironment({
     weatherService,
     venue,
     seed,
+    terrainField: windInfluence,
     depthAt: (x, z) => terrain.depthAt(x, z),
     isLand: (x, z) => terrain.isLand(x, z),
     sessionStartEpochMs: nowMs,

@@ -47,7 +47,10 @@ import { AeroForce } from '@physics/forces/AeroForce';
 import { HydroResistance } from '@physics/forces/HydroResistance';
 import { FoilLift } from '@physics/forces/FoilLift';
 import { RightingMoment } from '@physics/forces/RightingMoment';
-import { AngularDampingForceGenerator, DINGHY_ANGULAR_DAMPING } from './AngularDamping';
+import {
+  HydrodynamicDampingForceGenerator,
+  DINGHY_HYDRO_DAMPING,
+} from '@physics/forces/HydrodynamicDamping';
 
 /** The full result of building a boat for simulation. */
 export interface BuiltBoatSpec {
@@ -67,11 +70,13 @@ export interface CreateBoatSimulationOptions {
   /**
    * Include the WaveDrag generator (orbital drag + surfing + slam). Default true.
    *
-   * WaveDrag keeps module-scope per-point slam state (`_wasAbove`/`_prevVy`) that
-   * is shared across instances; in a long headless soak its slam impulse can also
-   * pump the lightly-damped roll mode. Callers that need a deterministic, clean
-   * long run (e.g. a soak-stability check) may set this false; buoyancy still
-   * drives the heave/pitch response to waves.
+   * WaveDrag adds wave-added resistance, down-wave surfing and slam impulses.
+   * The hull's essential velocity/rotational damping now comes from the
+   * dedicated `HydrodynamicDampingForceGenerator` (not WaveDrag), so the sim is
+   * stable and deterministic with WaveDrag either on or off. WaveDrag's slam
+   * state is now instance-scoped (no cross-instance aliasing), so toggling it
+   * off is only needed to isolate wave-added-resistance effects, not for
+   * stability. Default on.
    */
   includeWaveDrag?: boolean;
 }
@@ -345,7 +350,7 @@ export function createBoatSimulation(
   const waveDrag = new WaveDragForceGenerator(opts.id ?? def.id, opts.eventBus);
   const aero = new AeroForce(spec);
   const righting = new RightingMoment();
-  const damping = new AngularDampingForceGenerator(DINGHY_ANGULAR_DAMPING);
+  const damping = new HydrodynamicDampingForceGenerator(DINGHY_HYDRO_DAMPING);
 
   sim.addForceGenerator(buoyancy);
   sim.addForceGenerator(foils);
@@ -358,9 +363,10 @@ export function createBoatSimulation(
   }
   sim.addForceGenerator(aero);
   sim.addForceGenerator(righting);
-  // Hydrodynamic angular damping (roll/pitch/yaw). Composable boat-level
-  // generator — the frozen physics models the righting moment but not the
-  // damping that lets a dinghy actually settle. See AngularDamping.ts.
+  // Hydrodynamic damping (roll/pitch/yaw + heave/surge). Composable physics
+  // generator — the frozen conservative force set models the righting moment
+  // but not the velocity damping that lets a dinghy actually settle and keeps
+  // the free yaw mode bounded. See physics/forces/HydrodynamicDamping.ts.
   sim.addForceGenerator(damping);
 
   return { sim, spec, hullMesh, aero, foils, resistance, righting };

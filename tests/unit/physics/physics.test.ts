@@ -42,6 +42,7 @@ import { computeRightingCurve } from '@physics/hydrostatics/rightingCurve';
 import { distributeBuoyancyPoints } from '@physics/hydrostatics/buoyancyPoints';
 import { BuoyancyForceGenerator } from '@physics/forces/Buoyancy';
 import { WaveDragForceGenerator } from '@physics/forces/WaveDrag';
+import { HydrodynamicDampingForceGenerator } from '@physics/forces/HydrodynamicDamping';
 import { vec3 } from '@core/math';
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
@@ -652,8 +653,24 @@ describe('Buoyancy and settling', () => {
     const env = makeEnvironment();
     const dt = 1 / 120;
 
-    // Add linear damping by using wave drag with flat water (provides damping)
-    sim.addForceGenerator(new WaveDragForceGenerator('test'));
+    // Heave/attitude settling damping comes from the dedicated hydrodynamic
+    // damping generator — the physically correct source. (WaveDrag used to be
+    // (ab)used for this because its orbital-drag term silently applied the FULL
+    // quadratic hull drag on flat water; that double-counted HydroResistance and
+    // was corrected to a wave-ADDED increment that is ~0 on flat water. The
+    // settling assertion below is unchanged — a floating box must damp to rest —
+    // only the force providing that damping is now the correct one.)
+    // Coefficients sized for this 4100 kg box: heave spring k≈ρgA≈80 kN/m,
+    // so critical heave damping c≈2√(k·m)≈36 kN/(m·s⁻¹); we use a stiff fraction.
+    sim.addForceGenerator(
+      new HydrodynamicDampingForceGenerator({
+        rollLinear: 5000, rollQuad: 0,
+        pitchLinear: 5000, pitchQuad: 0,
+        yawLinear: 2000, yawQuad: 0,
+        heaveLinear: 20000,
+        surgeLinear: 2000,
+      }),
+    );
 
     // Simulate 30 seconds — should settle
     const totalSteps = 30 * 120;
@@ -760,6 +777,19 @@ describe('Wave coupling', () => {
     const sim = new BoatSimulationImpl(spec);
     sim.addForceGenerator(new BuoyancyForceGenerator());
     sim.addForceGenerator(new WaveDragForceGenerator('test'));
+    // Hydrodynamic damping bounds the heave/pitch response. (WaveDrag now
+    // supplies only the wave-ADDED resistance increment, not the steady hull
+    // drag it previously double-counted, so the heave damping must come from the
+    // dedicated generator — the physically correct source.)
+    sim.addForceGenerator(
+      new HydrodynamicDampingForceGenerator({
+        rollLinear: 4000, rollQuad: 0,
+        pitchLinear: 4000, pitchQuad: 0,
+        yawLinear: 2000, yawQuad: 0,
+        heaveLinear: 8000,
+        surgeLinear: 1500,
+      }),
+    );
 
     // 2m amplitude sinusoidal wave with 50m wavelength
     const waveField = makeSinusoidalWaveField(1.0, 50);

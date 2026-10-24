@@ -37,23 +37,33 @@ const SLAM_VELOCITY_THRESHOLD = 2.0;
 // Slam impulse coefficient: fraction of kinetic energy converted to vertical impulse
 const SLAM_IMPULSE_COEFF = 0.5;
 
-// Scratch vectors
-const _worldPoint: Vec3 = vec3();
-const _orbitalVel: Vec3 = vec3();
-const _relativeVel: Vec3 = vec3();
-const _hullVelAtPoint: Vec3 = vec3();
-const _omega_cross_r: Vec3 = vec3();
-const _r: Vec3 = vec3();
-
-// Per-point state for slam detection (tracks whether each point was above water last step)
-const _wasAbove: boolean[] = [];
-const _prevVy: number[] = [];
-
 export class WaveDragForceGenerator implements ForceGenerator {
   readonly id = 'waveDrag';
 
   private readonly _eventBus: EventBus | undefined;
   private readonly _boatId: string;
+
+  // ── Per-INSTANCE scratch vectors (allocated once per generator, reused every
+  // step). These were previously module-scope and therefore shared across every
+  // WaveDragForceGenerator instance — a latent aliasing hazard identical to the
+  // CurrentField bug this project already fixed. Per-instance means two boats (or
+  // two parallel tests) never clobber each other's working vectors.
+  private readonly _worldPoint: Vec3 = vec3();
+  private readonly _orbitalVel: Vec3 = vec3();
+  private readonly _relativeVel: Vec3 = vec3();
+  private readonly _hullVelAtPoint: Vec3 = vec3();
+  private readonly _omega_cross_r: Vec3 = vec3();
+  private readonly _r: Vec3 = vec3();
+
+  // ── Per-INSTANCE slam state for slam detection (tracks whether each buoyancy
+  // point was above water last step, and its prior vertical velocity). Was
+  // module-scope (`_wasAbove`/`_prevVy`) and therefore SHARED across instances,
+  // which made a parallel soak non-deterministic: one boat's re-entry history
+  // leaked into another's slam trigger. Now owned by the generator, so the slam
+  // behaviour is deterministic per boat regardless of test order or how many
+  // boats run concurrently.
+  private readonly _wasAbove: boolean[] = [];
+  private readonly _prevVy: number[] = [];
 
   constructor(boatId: string, eventBus?: EventBus) {
     this._boatId = boatId;
@@ -64,6 +74,15 @@ export class WaveDragForceGenerator implements ForceGenerator {
     const { state, boat, environment, time, dt } = ctx;
     const points = boat.hydrostatics.buoyancyPoints;
     const waterDensity = ctx.waterDensity;
+
+    const _worldPoint = this._worldPoint;
+    const _orbitalVel = this._orbitalVel;
+    const _relativeVel = this._relativeVel;
+    const _hullVelAtPoint = this._hullVelAtPoint;
+    const _omega_cross_r = this._omega_cross_r;
+    const _r = this._r;
+    const _wasAbove = this._wasAbove;
+    const _prevVy = this._prevVy;
 
     for (let i = 0; i < points.length; i++) {
       const bp = points[i];
@@ -137,28 +156,41 @@ export class WaveDragForceGenerator implements ForceGenerator {
       // Sample orbital velocity at this point
       environment.waves.orbitalVelocity(_worldPoint.x, _worldPoint.z, _worldPoint.y, time, _orbitalVel);
 
-      // Relative velocity of hull through the water (hull - water motion)
+      // Relative velocity of hull through the water INCLUDING wave orbital motion.
       _relativeVel.x = _hullVelAtPoint.x - _orbitalVel.x;
       _relativeVel.y = _hullVelAtPoint.y - _orbitalVel.y;
       _relativeVel.z = _hullVelAtPoint.z - _orbitalVel.z;
 
       const relSpeed = length3(_relativeVel);
-      if (relSpeed < 1e-6) continue;
-
-      // Quadratic drag: F = -0.5 * ρ * Cd * A * |v| * v
-      // Area is the section area of this buoyancy point
-      const dragMag = 0.5 * waterDensity * ORBITAL_DRAG_COEFF * bp.sectionArea * relSpeed;
 
       // Submergence factor: drag scales with how much of the point is submerged
       const subFraction = clamp(submergence / 1.0, 0, 1);
 
+      // WAVE-ADDED resistance only. This generator models the EXTRA quadratic
+      // drag (and down-wave surfing push) that the wave orbital motion adds on
+      // top of the hull's steady through-water drag — it must NOT re-levy the
+      // steady drag, which HydroResistance already owns via the wetted-surface /
+      // residuary model. Previously this applied the FULL quadratic drag on the
+      // relative velocity, which on FLAT water (orbital velocity = 0) reduced to
+      // ~1000 N of pure hull drag at 5 kt — roughly 4× HydroResistance and the
+      // reason the boat could never build sailing speed ("it crabs and stops").
+      //
+      // We therefore apply the DIFFERENCE between drag at the wave-relative
+      // velocity and drag at the steady hull velocity, component-wise:
+      //   F_i = −k·(|v_rel|·v_rel,i − |v_hull|·v_hull,i) · subFraction
+      // On flat water v_rel = v_hull so F = 0 (no double count); in a seaway the
+      // orbital fluctuation produces added resistance into a head sea and a net
+      // forward push surfing down a wave face — both emergent, not scripted.
+      const k = 0.5 * waterDensity * ORBITAL_DRAG_COEFF * bp.sectionArea * subFraction;
+      const hullSpeed = length3(_hullVelAtPoint);
+      if (relSpeed < 1e-6 && hullSpeed < 1e-6) continue;
+
       const applied = allocForce();
       if (applied === undefined) break;
 
-      // Drag opposes relative motion
-      applied.force.x = -_relativeVel.x * dragMag * subFraction;
-      applied.force.y = -_relativeVel.y * dragMag * subFraction;
-      applied.force.z = -_relativeVel.z * dragMag * subFraction;
+      applied.force.x = -k * (relSpeed * _relativeVel.x - hullSpeed * _hullVelAtPoint.x);
+      applied.force.y = -k * (relSpeed * _relativeVel.y - hullSpeed * _hullVelAtPoint.y);
+      applied.force.z = -k * (relSpeed * _relativeVel.z - hullSpeed * _hullVelAtPoint.z);
 
       copy3(applied.point, _worldPoint);
       out.push(applied);

@@ -54,22 +54,97 @@ downwind 160°; capsize in 25 kt sheet-cleated no-hike at **2.6 s**.
    came out negative on a reach (boat sailed backwards). Fixed; verified forward drive + leeward heel on both tacks.
 
 **Honest scope reductions (documented in code + here):**
-- Free-sailing time-domain tests use the COMPUTED polar (`solvePolar`) for the quantitative beam-reach speed, and test the
-  sail DRIVE sign / luff collapse directly on `AeroForce`, because the full 6-DOF sim cannot autonomously hold a line to a
-  target speed without a stabilising helm/trim autopilot (that controller is Phase 2 Stream G / AI, not the boat def):
-  at the speeds it settles to, leeway dominates and the boat crabs rather than sailing forward.
-- The capsize-contrast "does NOT capsize when hiking" is demonstrated at 8 kt (a PD hiking sailor holds it flat); above
-  ~10 kt under sail the frozen explicit-RK4 roll integration at a dinghy's low roll inertia is numerically fragile.
-- The 200 s soak is asserted over a robust 20 s window (calm water, equilibrium start): WaveDrag's orbital drag is the
-  hull's essential velocity damping, but it carries module-scope slam state shared across test instances (non-deterministic
-  under the parallel suite), and WITHOUT WaveDrag the frozen explicit integrator diverges to NaN even on calm flat water
-  over a long run. A full 200 s run passes in isolation. This is an explicit-integrator stability limit (needs an
-  implicit/substepped angular integrator), not a boat-definition issue.
+- UPDATED by the PhysicsStability stream — the predecessor's reductions below are
+  **superseded**. The NaN divergence, the "fragile above ~10 kt" roll, the
+  module-scope WaveDrag slam state, the leeway crab, and the 20 s-window soak are
+  all RESOLVED (see the PhysicsStability section further down). What remains
+  scoped-down and documented: (a) the fully-autonomous closed-loop autopilot
+  holds a steady beam reach without capsize up to ~12 kt, not 15 kt+, and does
+  not execute clean tacks/gybes — that needs the anticipating AI crew (Stream G);
+  (b) the polar's upwind VMG optimum is still ~35° (the leeway/foil-stall term
+  was attempted and reverted as it didn't robustly widen it — Task E left
+  documented).
 
-Verification: `npx vitest run tests/unit/boats tests/unit/physics src/physics` → 83/83 pass; full `npx vitest run` →
-1308/1308 pass (confirmed green across 5 consecutive runs — the soak is deterministic); `npx tsc --noEmit` 0 errors;
-`npx eslint src/boats tests/unit/boats --max-warnings 0` 0 warnings. Did NOT run `npm run ci` (per task). `src/types`
-untouched.
+### PhysicsStability stream (2026-10-24, UNCOMMITTED) — divergence + crab fixed, real acceptance tests restored
+
+Root cause of the NaN/roll fragility (with evidence), found via a calm-water
+diagnostic harness (WaveDrag off, damping off):
+
+1. **It was NOT a stiff integrator / buoyancy spring.** Measured heave stiffness
+   k≈4573 N/m on m≈133 kg → ω≈5.86 rad/s, so at 120 Hz ω·dt≈0.049 ≪ 2 — far
+   inside the explicit/symplectic stability limit. Sub-stepping would buy
+   nothing. The predecessor's "needs implicit/substepped integrator" hypothesis
+   was wrong.
+2. **The frozen conservative force set has no rotational damping and yaw is a
+   free integrator.** With no damping, yaw spun up monotonically (0.6 → 7.6 rad/s
+   over 60 s) and roll rang ±130°. WaveDrag was the only velocity sink, and its
+   orbital-drag term double-counted the steady hull drag (≈1000 N at 5 kt on
+   FLAT water — it was secretly most of the drag).
+3. **The interim `AngularDamping` generator had an inverted YAW force couple** →
+   it was ANTI-damping yaw, driving |ω_y| to ~105 rad/s in ~1.2 s and cascading
+   to a finite-but-astronomical (~1e141) blow-up that `isStateFinite` doesn't
+   catch (Number.isFinite(1e141) is true).
+
+What changed (all in `src/physics` / `src/boats`, no frozen types touched):
+- **WaveDrag** (`forces/WaveDrag.ts`): slam state (`_wasAbove`/`_prevVy`) and the
+  scratch vectors are now INSTANCE-scoped (no cross-instance aliasing → parallel
+  runs deterministic). Its orbital drag is now a wave-ADDED increment
+  (`drag(v_rel) − drag(v_hull)`), ≈0 on flat water, so it no longer double-counts
+  HydroResistance.
+- **HydrodynamicDamping** (`forces/HydrodynamicDamping.ts`, NEW; folds in and
+  replaces `boats/AngularDamping.ts`, which is deleted): roll/pitch/yaw + heave/
+  surge damping with the CORRECT yaw-couple sign. Roll damped hardest (1400→5000
+  lin / 2500 quad) so a dinghy's roll is near-critically damped and passively
+  stable to ~10 kt; surge kept small (12) so it does not eat sailing speed.
+- **FoilLift** (`forces/FoilLift.ts`): daggerboard lift SIGN fixed — it was
+  `−sign(cl)` (amplifying leeway → the boat crabbed off at 50–70° leeway and
+  never held a course); now `+sign(cl)`, opposing leeway (verified: at 9°
+  starboard leeway the foil now pulls +823 N to port, was +792 N to starboard).
+- **AeroForce** (`forces/AeroForce.ts`): apparent-wind angle was computed from
+  the wind VELOCITY direction (180° off the aerodynamic comes-from convention),
+  so the sail was permanently past stall and drive was INDEPENDENT of the sheet.
+  Now uses the comes-from incidence; drive responds to trim and peaks attached
+  (beam reach, 5 kt: ~186 N drive at the optimum vs ~27 N stalled).
+
+Real acceptance tests restored (`tests/unit/boats/stability.test.ts`,
+`sailing.test.ts`, `golden.test.ts`):
+- FULL 200 s soaks, finite + bounded every step: 30 kt/1.5 m and 35 kt/3 m WITH
+  WaveDrag, and **40 kt/5 m WITHOUT WaveDrag** (proving stability no longer
+  depends on it). Capsize allowed, divergence not.
+- Capsize contrast: capsizes < 20 s in 25 kt cleated no-hike; does NOT capsize in
+  a 12 kt beam reach hiking with the sheet eased (the 15 kt target exceeds the
+  simple-controller roll ceiling — AI-crew work).
+- Golden 20 s trajectory baseline (`fixtures.golden.ts`) + determinism + a
+  NEGATIVE CONTROL (doubling the residuary drag must break the baseline — it
+  does).
+- Determinism: same seed/inputs twice → bit-identical state; two interleaved
+  instances don't alias.
+- Closed-loop "it sails" (simple PD-helm + depower + monotone hike autopilot,
+  10 kt): beam reach holds course (±35°) at **leeway < 15°** (was ~60°), bounded
+  speed, >20 m made good east over 60 s, no capsize; close reach makes **net
+  positive upwind VMG** (was negative — bodily downwind). Measured steady beam-
+  reach speed under the simple autopilot ≈ 2.4–3.0 kt; the quantitative ILCA 5–7
+  kt band is on the computed polar (`dinghy.test.ts`, still 5.64 kt).
+
+Also: added additive `terrainField?: TerrainInfluenceField` to
+`EnvironmentConfig` (`src/environment/Environment.ts`), forwarded to
+`createWindField`; `createVenueEnvironment` now injects the generated wind
+influence field through it (return shape unchanged) — the former contract gap is
+closed. Test: `tests/unit/physics/environmentTerrainField.test.ts`.
+
+Verification (PhysicsStability): `npx vitest run tests/unit src/physics src/boats`
+→ **827 passed / 52 files**; `npx tsc --noEmit` 0 errors; `npx eslint src/physics
+src/boats src/environment src/venues tests/unit --max-warnings 0` clean. Did NOT
+run `npm run ci` (per task). `src/types` untouched.
+
+<details><summary>Predecessor's now-superseded reductions (kept for history, all RESOLVED above)</summary>
+
+- ~~Free-sailing tests use the polar because the sim crabs and can't hold a line.~~
+- ~~Capsize-does-not-happen demonstrated only at 8 kt; roll fragile above ~10 kt.~~
+- ~~200 s soak reduced to a 20 s window; WaveDrag slam state shared across
+  instances; without WaveDrag the integrator diverges to NaN.~~
+
+</details>
 
 ### Phase 0 — complete
 
@@ -95,7 +170,7 @@ untouched.
 | E — Ocean rendering | ✅ complete (5/5) | `src/render/ocean/` |
 | **F — Sky, lighting, post** | ✅ **complete (4/4), uncommitted** | `src/render/{sky,weather,post,night,lighting,atmosphere}/` — see "Stream F" below |
 | G — Game systems | 🚧 in progress (1/7) | **G.1 Input & helm feel done** (`src/game/input/`, `src/input/`) — see "Stream G.1" below. G.2–G.5 not started. |
-| H — Audio and UI | ❌ not started | `src/audio/`, `src/ui/` (only `strings.ts`). NOTE: `src/input/` now exists (created by G.1 DOM adapters). |
+| H — Audio and UI | 🚧 in progress | **H.3 HUD done** (`src/game/hud/` view-models + `src/ui/hud/` React/Zustand). **H.4 Cameras & photo mode done** (`src/game/camera/` pure models + `src/render/camera/` three driver) — see "Stream H.4" below. Audio + other UI not started. `src/input/` exists (G.1). |
 | I — Boat rendering | ✅ complete (2/2) | `src/render/boat/`, `src/render/cloth/` |
 
 Phases 2, 3 and 4 are untouched. **Nothing in Streams D/E/F/I is wired to the app entry point** — that is
@@ -229,6 +304,159 @@ type-checker typed those imports as `any`/error. Tests import the DOM layer as *
 ---
 
 
+## Stream H.3 — HUD (complete 2026-10-24, uncommitted)
+
+Architecture: **pure view-model layer `src/game/hud/` (no React, no three, no DOM) +
+React/Zustand UI in `src/ui/hud/`**. The render loop builds a view model each UI tick
+and publishes it into a vanilla Zustand store through a throttle; React only READS the
+store (never touches the render loop — the architectural rule). No new dependencies
+added; no jsdom (markup is tested via `react-dom/server` `renderToStaticMarkup`, store/
+throttle via `vi.useFakeTimers`). `src/types` untouched.
+
+Files:
+- `src/game/hud/`: `types.ts` (local, non-frozen view-model types), `presets.ts`
+  (density table Full/Moderate/Minimal/None as DATA + `widgetVisibility`/`nextPreset`),
+  `navMath.ts` (`computeVmg`, `apparentWindAngle`, `targetSpeedFraction`, `laylineBearings`,
+  `windAngleOffBow`, `optimalUpwindTwa`, `pointOfSail`, `bearingTo`/`distanceTo`),
+  `HudViewModel.ts` (`buildHudViewModel(input, out?)` allocation-reuse builder +
+  `createHudViewModel`), `formatHud.ts` (pure string layer: `6.2 kt`, `045°`, `0.32 nm`,
+  `SIMULATED`), `index.ts`.
+- `src/ui/hud/`: `hudStyles.ts` (CSS-in-TS tokens from art-direction §8, no assets, no
+  drop shadows, opaque-backdrop variable), `hudStore.ts` (vanilla `createStore`,
+  settings persisted via the reused `KeyValueStore` seam, `createHudPublisher` 10 Hz
+  throttle), `Panel.tsx`, `WindIndicator.tsx`, `SpeedPanel.tsx`, `TrimGauge.tsx`,
+  `HeelHelmGauge.tsx`, `CompassPanel.tsx`, `ConditionsPanel.tsx`, `CoachingBanner.tsx`,
+  `HudRoot.tsx` (pure `HudRoot` + store-bound `HudRootConnected`), `mountHud.ts`
+  (`mountHud(container, store)` + idempotent `ensureHudStyles`), `index.ts`.
+- Tests: `tests/unit/game/hud/` (navMath 25, presets 33, HudViewModel 23, formatHud 13)
+  + `tests/unit/ui/` (hudStore 13, hudPublisher 9, hudMarkup 13, mountHud 2).
+  **131 tests, all passing** (`npx vitest run tests/unit/game/hud tests/unit/ui`).
+
+Per-frame session API (what wires the game to the HUD):
+1. `const store = createHudStore(new LocalStorageKeyValueStore())` (DOM) or
+   `createHudStore()` (headless); `mountHud(uiRootEl, store)` once at startup.
+2. `const out = createHudViewModel()` once; `const pub = createHudPublisher(store)` once.
+3. Each frame: `buildHudViewModel(hudInput, out)` then `pub.publish(out)`. The publisher
+   throttles to ~10 Hz and `structuredClone`s on store entry (default `snapshot`) so React
+   gets immutable frames even though `out` is reused. `pub.flush()` on pause; `pub.dispose()`
+   + `mountedHud.unmount()` on teardown.
+
+Design facts / deviations (all honest, labelled in code):
+- `HudSailTrim` MIRRORS the parts of the frozen physics `SailAeroState` the trim gauge
+  shows (attachment, luffing) rather than importing the type, so the game/hud layer stays
+  decoupled from physics internals — the render loop maps `SailAeroState → HudSailTrim`.
+- `formatHud` does NOT import `@/ui/strings` (would be a game→ui layering inversion); it
+  returns the raw `WeatherSource` enum via the view model and the UI component localizes the
+  source label through `strings.weather.sourceLabels` (which already covers all 5 sources).
+  The `'SIMULATED'` sandbox badge is a fixed token the spec mandates.
+- CSS is a typed CSS-in-TS string injected by `mountHud` (the project loads CSS inline in
+  `index.html` and has no `import './x.css'` precedent in `src/`); keeps the HUD asset-free
+  and importable headlessly.
+- Units: knots/nm live ONLY in the view-model/format layer, converted with the exact `UNITS`
+  constants (1852/3600). Mark distance shows metres under ~1000 m, nm beyond (km for metric).
+- Accessibility: every panel is an aria-labelled region; SVG instruments are `role="img"`
+  with text alternatives carrying the same numbers; luff/capsize/source are visible TEXT not
+  colour-only; `prefers-reduced-motion` disables transitions; opaque backdrop (Instrument
+  Black @92% → 16.5:1, WCAG AA) is a toggle.
+
+Verification: `npx vitest run tests/unit/game/hud tests/unit/ui` → 131/131 pass;
+`npx eslint src/game/hud src/ui tests/unit/game/hud tests/unit/ui --max-warnings 0` → 0
+warnings; `npx tsc --noEmit` → 0 errors in any HUD file (the one remaining repo tsc error is
+`tests/unit/boats/_diag8.test.ts`, owned by the concurrent boats agent). Did NOT run
+`npm run ci` (per task). Nothing here is wired into the app entry yet (same tree-shake caveat
+as other unwired streams) — wiring the publisher into the frame loop + `mountHud` into
+`#ui-root` is Phase 2 task 2.1 integration.
+
+## Stream H.4 — Cameras and photo mode (complete 2026-10-24, uncommitted)
+
+Architecture: **pure camera models in `src/game/camera/` (no three, no DOM) + thin
+three.js driver in `src/render/camera/`**. The pure layer produces a plain-data
+`CameraPose`; the render layer applies it to a `THREE.PerspectiveCamera`. This
+keeps the whole camera brain headlessly testable (all tests run under vitest
+`node`, no WebGL context).
+
+Files:
+- `src/game/camera/`: `types.ts` (CameraFrame/CameraPose/CameraMode + cycle),
+  `cameraMath.ts` (`lookRotationZNeg` in the three -Z-forward convention,
+  `applyViewRoll`, `dampVec3`), `settings.ts` (per-mode FOV, horizon-lock,
+  reduced-roll, head-motion caps, smoothing, `CAMERA_NEAR`/`CAMERA_FAR`),
+  `modes.ts` (helm/chase/mast/drone placements + bounded head motion),
+  `broadcast.ts` (`BroadcastDirector` scoring + dwell/margin hysteresis),
+  `photo.ts` (`PhotoCamera` free-fly, focal-length→FOV, exposure, DoF, capture),
+  `controller.ts` (`createCameraController`), `index.ts` barrel.
+- `src/render/camera/`: `CameraRig.ts` (wraps `THREE.PerspectiveCamera`,
+  `applyPose`/`resize`), `PhotoCapture.ts` (`capturePhoto(canvas): Promise<Blob>`
+  guarded for no-`toBlob` environments), `index.ts`.
+- Tests: `tests/unit/game/camera/` (cameraMath, photo, broadcast, controller) +
+  `src/render/camera/{CameraRig,PhotoCapture}.test.ts`. **63 tests, all passing.**
+
+Per-frame session API (the layer wiring game→render calls these each frame):
+- `const cam = createCameraController({ mode?, settings?, aspect? })`.
+- `const pose = cam.update(frame: CameraFrame, dt): CameraPose` — build the frame
+  from the interpolated player `BoatState` (position/orientation/velocity/heel/
+  pitch/heading), a `slam` 0..1, boat geometry (`mastHeight`/`loa`/`eyeOffset`),
+  `marks`/`otherBoats` world positions, `time`, `lookDelta`, optional
+  `sunDirection`/`isLand`. Pose reused every frame (allocation-free steady state).
+- `cam.cycle()` on `InputState.cameraCycle`; `cam.setMode(m)`; `cam.togglePhoto()`
+  on `InputState.pausePressed` → read `cam.paused` to pause the sim.
+- `cam.photo.{focalLengthMm,exposure,focusDistance,aperture,hideHud}` are the
+  photo controls; `cam.getPhotoFrame().move/boost` is how the session drives
+  free-fly translation (frozen `InputState` carries only `lookDelta`);
+  `cam.capture()` returns a `CaptureRequest` the DOM layer feeds to
+  `capturePhoto(canvas)`.
+- Render side: `const rig = new CameraRig({aspect}); rig.applyPose(pose);
+  rig.resize(aspect)`; pass `rig.camera` to the renderer / PostChain.
+
+Key design facts / deviations (all honest, labelled in code):
+- **-Z forward convention** made explicit and tested: a camera at the stern
+  looking along the boat's forward has the bow ahead in view (dot ≈ +1, not the
+  flipped −1). Roll about the view axis (`applyViewRoll`) tested for sign/axis.
+- **Horizon lock** is a 0..1 fraction of boat heel fed to `applyViewRoll`:
+  tested lock=0 → camera roll ≈ 0 at 30° heel, lock=1 → roll == heel, and **RMS
+  camera roll over a synthetic ±25° rolling sequence decreases monotonically as
+  lock drops 1→0** (the measurable-reduction demo from tasks.md). Reduced-roll
+  halves head motion; reduced-motion-zero zeroes it (tested).
+- **Frame-rate independence:** all smoothing is exponential in dt (`dampVec3` /
+  `damp`); tested that two 0.05 s half-steps equal one 0.1 s step, and chase
+  converges to the same place at 30 Hz and 120 Hz within tolerance.
+- **Head motion** (helm) is bounded by explicit caps (`maxTranslation` 0.12 m,
+  `maxPitch`); tested the slam-induced eye delta stays < 0.2 m.
+- **Broadcast** scores a deterministic candidate ring (subject-in-frame,
+  pleasant distance band, gentle downward horizon, sun-avoidance when
+  `sunDirection` given, land-occlusion penalty when `isLand` given) with
+  **dwell (4 s) + margin (0.12) hysteresis**; tested deterministic, flicker-free
+  (cuts respect the dwell gate; < 10 cuts over 20 s of jitter), and the player
+  boat is never lost from frame. Candidate distance adapts to subject separation
+  so a boat + a far mark both fit the narrow (38°) broadcast cone.
+- **Photo mode:** `fov = 2·atan(12/f)` for a 24 mm-tall sensor (tested: 50 mm →
+  27°, 12 mm → 90°); exposure in stops flows to `CameraPose.exposure`; aperture →
+  `bokehScale`, focus distance + focal length → `CameraDoF` mapped to
+  `PostChain`'s `DoFConfig`; `hideHud` flag; `capture()` returns a cloned,
+  reproducible pose + request id.
+- **Clip planes:** `far = 20000` m clears the 8000 m sky dome and 12000 m cloud
+  dome (both camera-following); `near = 0.1` m for a cockpit-close helm view.
+- **One additive edit outside the owned dirs:** `src/three-env.d.ts` gained
+  `fov`/`near`/`far` on `PerspectiveCamera` (standard three members the minimal
+  ambient decl lacked). Purely additive — widens types only, cannot break
+  existing render code. The file was NOT deleted (per steering). `src/types/`
+  untouched.
+
+Verification: `npx vitest run tests/unit/game/camera src/render/camera` → 63/63
+pass; `npx eslint src/game/camera src/render/camera tests/unit/game/camera
+--max-warnings 0` → clean (exit 0); `npx tsc --noEmit` → zero errors in the
+camera dirs (the only repo tsc error is in a concurrently-in-flight
+`tests/unit/boats/*` owned by another agent). Did NOT run `npm run ci` (per task).
+
+### Honest reduction / integration notes for whoever wires H.4 into Phase 2 task 2.1
+- Nothing here is imported by the app entry yet (same tree-shake caveat as the
+  other unwired streams).
+- `slam` intensity is an input the session must derive (e.g. from recent hull
+  vertical acceleration); the camera only consumes it.
+- `CameraFrame.isLand`/`sunDirection` are optional; broadcast simply skips those
+  score terms when they are absent.
+- `capturePhoto` only performs the canvas read; the caller must time it within
+  the rendered frame (or set `preserveDrawingBuffer`) for a non-blank grab.
+
 ## Known follow-ups from Stream D (independent audit, 2026-07-25)
 
 - **FIXED** hull lofter ~15% short of `loa`; terrain bathymetry non-monotonic past the outermost contour; added concave and
@@ -256,17 +484,15 @@ Files: `definitions/newport.ts`, `data/newport.coastline.ts` (coordinate tables 
 `listVenueIds`, `NEWPORT`, `buildVenueTerrain`, `createVenueEnvironment`, `latLonToVenueLocal`/
 `venueLocalToLatLon`, plus the Newport data exports.
 
-**CONTRACT GAP found (precise, adapted not patched):** `EnvironmentConfig`
-(`src/environment/Environment.ts`) has **no** field to pass a wind influence / terrain field.
-`createEnvironment` always builds its wind via `createWindField({weatherService, seed, windProfile})`
-with no `terrainField`, so the generated `WindInfluenceFieldResult` cannot reach the Environment
-through the frozen config. `WindInfluenceFieldResult` already structurally matches the
-`TerrainInfluenceField` the wind layer accepts, so the clean fix is a purely additive
-`terrainField?: TerrainInfluenceField` on `EnvironmentConfig` forwarded to `createWindField`
-(Environment.ts is implementation, not in `src/types`, so this is not a frozen-type change).
-Until then `createVenueEnvironment` returns the generated field alongside the Environment for a
-caller/future extension to consume. This also finally gives `WindInfluenceField` an end-to-end
-venue integration (closes part of the Stream-D follow-up above).
+**CONTRACT GAP — now CLOSED (by the PhysicsStability stream):** `EnvironmentConfig`
+(`src/environment/Environment.ts`) now carries an additive, backward-compatible
+`terrainField?: TerrainInfluenceField` that `createEnvironment` forwards to
+`createWindField`; `WindInfluenceFieldResult` structurally matches that type, so
+`createVenueEnvironment` injects the generated field straight through (its return
+shape — still exposing `windInfluence` — is unchanged). The venue's lee/gap/bend
+wind effects now modulate the simulated wind, giving `WindInfluenceField` its
+end-to-end venue integration (closes part of the Stream-D follow-up above). Test:
+`tests/unit/physics/environmentTerrainField.test.ts`.
 
 **Closed-ring follow-up guarded:** TerrainBuilder ignores open coastline polylines, so all four
 Newport rings (Aquidneck W shore, Conanicut E shore, Goat I., Rose I.) are authored `closed: true`

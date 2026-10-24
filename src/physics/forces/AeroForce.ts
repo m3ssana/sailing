@@ -183,25 +183,42 @@ export class AeroForce implements ForceGenerator {
       normalize3(_apparentWind, _windNorm);
 
       // --- Angle of attack ---
-      // The apparent wind angle relative to the boat's centreline.
-      const awaRaw = Math.atan2(
-        dot3(_apparentWind, _right),
-        dot3(_apparentWind, _forward),
-      );
+      // Apparent-wind INCIDENCE angle relative to the bow, in [0, π]:
+      //   0   = apparent wind dead ahead (head to wind, sail luffs)
+      //   π/2 = apparent wind on the beam
+      //   π   = apparent wind dead astern (dead run)
+      //
+      // This is the angle between the direction the wind COMES FROM (−aw) and
+      // the bow (forward). Measuring it from the velocity direction instead
+      // (the old `atan2(aw·right, aw·forward)`) was 180° off: on a beam reach
+      // that reported ~112° when the true incidence is ~67°, forcing the sail
+      // permanently past stall (alpha ≥ 30°) so DRIVE never responded to the
+      // sheet. Using the physical comes-from incidence, easing the sheet on a
+      // reach brings the flow attached and the drive peaks — as it must.
+      const awForward = dot3(_apparentWind, _forward);
+      const awSide = dot3(_apparentWind, _right);
+      // Incidence from bow: acos of the comes-from direction dotted with forward.
+      const awaInc = Math.acos(clamp(-awForward / apparentSpeed, -1, 1));
+      // Which side the apparent wind is on (and therefore the leeward side the
+      // sail sets to): +1 = wind over starboard → boom to port, heel to port;
+      // −1 = wind over port → boom to starboard, heel to starboard. The sign of
+      // the side component of the apparent-wind velocity selects the tack.
+      const sideSign = Math.sign(awSide) || 1;
 
-      // Sail trim angle from controls: how far the sail is eased from centreline.
+      // Sail trim angle from controls: how far the boom is eased from centreline.
       const trimAngle = getSailTrim(sail, controls);
 
-      // Angle of attack = apparent wind angle - sail chord angle.
-      // The chord is angled at (trimAngle) from the centreline on the leeward side.
-      // AoA is the difference between wind direction and sail chord.
-      let alpha = awaRaw - trimAngle * Math.sign(awaRaw);
+      // Angle of attack = apparent-wind incidence − boom angle. When the boom is
+      // eased to roughly match the incidence the flow attaches at a small alpha
+      // (high lift); over-trimmed (boom too far in) → alpha large → stall;
+      // over-eased / head-to-wind → alpha ≤ 0 → luffing.
+      let alpha = awaInc - trimAngle;
 
       // Slot effect: main gets additional effective alpha when headsail is working.
       if (slotActive && sail.kind === 'main') {
         // The headsail bends the apparent wind, effectively increasing the main's alpha.
         const slotBonus = SLOT_EFFECT_ALPHA_BONUS * controls.jibsheet;
-        alpha += slotBonus * Math.sign(alpha);
+        alpha += slotBonus;
       }
 
       // Effective camber — vang tension reduces camber (flattens the sail for depower).
@@ -217,26 +234,17 @@ export class AeroForce implements ForceGenerator {
       // F = 0.5 * rho * A * V^2 * C
       const dynamicPressure = 0.5 * airDensity * sail.area * apparentSpeed * apparentSpeed;
 
-      // Lift is perpendicular to apparent wind, in the horizontal plane.
-      // Drag is parallel to apparent wind direction.
+      // Lift is perpendicular to the apparent wind in the waterplane; drag is
+      // along the apparent-wind velocity (the wind pushes the boat downwind).
       //
-      // Lift direction: rotate the (normalised) apparent-wind direction 90° in
-      // the waterplane, with the rotation SENSE chosen so lift drives the boat
-      // FORWARD and heels it to LEEWARD.
-      //
-      // BUG FIX (first exercised when AeroForce was wired into BoatSimulation
-      // for Phase 2 task 2.1 — the whole sail-force path had never run through
-      // the integrator before, see tests/unit/physics/forceAccumulation.test.ts).
-      // The previous sense, `liftDir = rot+90°(windNorm) * sign(awaRaw)`, pointed
-      // lift AFT: on a beam reach (wind FROM north, heading east, apparent wind
-      // flowing towards +Z) it produced a lift vector of (−1,0,0) = astern, so
-      // `drive = dot(force, forward)` came out NEGATIVE and the boat sailed
-      // backwards and capsized. The physically correct perpendicular is the
-      // −90° rotation (windNorm.z, −windNorm.x), which for that case gives
-      // (+1,0,0) = forward and heels to leeward. This is a pure sign/convention
-      // fix; magnitudes are unchanged. Regression: AeroForce drive-sign test.
-      const liftSign = Math.sign(awaRaw) || 1;
-      set3(_liftDir, _windNorm.z * liftSign, 0, -_windNorm.x * liftSign);
+      // `_windNorm` is the normalised apparent-wind VELOCITY (points downwind).
+      // Its two in-plane perpendiculars are ±(windNorm.z, 0, −windNorm.x). The
+      // one that produces forward DRIVE and LEEWARD heel is selected by the tack
+      // (`sideSign`): for wind over starboard (sideSign=+1) the lift points
+      // (windNorm.z, 0, −windNorm.x); the other tack flips it. Verified: on a
+      // beam reach this gives a forward, leeward-heeling force whose drive rises
+      // and falls with the sheet (Regression: AeroForce drive-sign + trim tests).
+      set3(_liftDir, _windNorm.z * sideSign, 0, -_windNorm.x * sideSign);
 
       // Drag direction: along apparent wind (the wind pushes the boat).
       set3(_dragDir, _windNorm.x, 0, _windNorm.z);

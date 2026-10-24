@@ -137,7 +137,10 @@ declare module 'three/webgpu' {
 
   export class PerspectiveCamera extends Camera {
     constructor(fov?: number, aspect?: number, near?: number, far?: number);
+    fov: number;
     aspect: number;
+    near: number;
+    far: number;
     updateProjectionMatrix(): void;
     lookAt(x: number, y: number, z: number): void;
   }
