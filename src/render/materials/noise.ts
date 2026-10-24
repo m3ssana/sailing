@@ -6,7 +6,7 @@
  * files. Per art-direction.md §3.3: maximum 4 noise octaves.
  */
 
-import { Fn, float, vec2, vec3 } from 'three/tsl';
+import { Fn, float, vec2, vec3, mix } from 'three/tsl';
 import type { TSLNode, TSLFn } from 'three/tsl';
 
 /**
@@ -48,9 +48,9 @@ export const valueNoise2D: TSLFn = Fn((args) => {
   // Bilinear interpolation using mix chains
   const ux = u.dot(vec2(1.0, 0.0));
   const uy = u.dot(vec2(0.0, 1.0));
-  const ab = a.mix(b, ux);
-  const cd = c.mix(d, ux);
-  return ab.mix(cd, uy);
+  const ab = mix(a, b, ux);
+  const cd = mix(c, d, ux);
+  return mix(ab, cd, uy);
 });
 
 /**

@@ -54,6 +54,7 @@ import {
   Fn,
   float,
   vec3,
+  mix,
   uniform,
   normalWorld,
   positionWorld,
@@ -214,7 +215,7 @@ export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialRe
     // Sample sky gradient based on reflected Y component (elevation)
     // Higher = zenith color, lower = horizon color
     const skyBlend = reflected.dot(vec3(0.0, 1.0, 0.0)).saturate();
-    return uSkyHorizonColor.mix(uSkyColor, skyBlend);
+    return mix(uSkyHorizonColor, uSkyColor, skyBlend);
   })();
 
   // ─── Depth absorption ─────────────────────────────────────────────────────
@@ -226,7 +227,7 @@ export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialRe
     const depthRatio = uWaterDepth.div(uExtinctionDepth).clamp(0.0, 1.0);
     // Turbidity accelerates absorption — at turbidity 1.0, absorption is instant
     const absorptionFactor = depthRatio.mul(float(1.0).add(uTurbidity.mul(2.0))).clamp(0.0, 1.0);
-    return uColorShallow.mix(uColorDeep, absorptionFactor);
+    return mix(uColorShallow, uColorDeep, absorptionFactor);
   })();
 
   // ─── Crest subsurface scattering ──────────────────────────────────────────
@@ -310,7 +311,7 @@ export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialRe
     // Base: blend between refracted/absorbed colour and reflected sky
     // based on Fresnel term. Refraction approximation: we use the absorbed
     // colour as the "seen through water" component.
-    const baseColor = absorption.mix(reflectionColor, fresnel);
+    const baseColor = mix(absorption, reflectionColor, fresnel);
 
     // Add subsurface scattering (additive — crests glow)
     const withSSS = baseColor.add(sss);

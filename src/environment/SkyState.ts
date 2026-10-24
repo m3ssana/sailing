@@ -128,7 +128,11 @@ export function solarPosition(
   // Solar time in minutes from midnight UTC.
   const utcMinutes = ((epochMs % 86400000) / 60000);
   // True solar time at the given longitude.
-  const trueSolarTime = ((utcMinutes + eot + 4 * longitude) % 1440);
+  // Wrap into [0, 1440). JS `%` keeps the dividend's sign, so for western
+  // longitudes the raw sum goes negative around 00:00 UTC; without the
+  // double-modulo the hour angle lands in (-360°, -180°) and the `hourAngle > 0`
+  // east/west test below mirrors the azimuth (sun shown in the east at sunset).
+  const trueSolarTime = (((utcMinutes + eot + 4 * longitude) % 1440) + 1440) % 1440;
 
   // Hour angle.
   const hourAngle = (trueSolarTime / 4 - 180) * DEG;

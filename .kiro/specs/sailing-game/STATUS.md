@@ -1,6 +1,9 @@
 # Project status — where to pick up
 
-**Last updated:** 2026-07-25 · **Last commit:** `eca577e` (pushed to `origin/master`) · **CI:** green
+**Last updated:** 2026-10-24 · **Last commit:** `2b95b01` (HEAD, pushed). **Stream F is complete but
+UNCOMMITTED** — it lives in the working tree (new dirs `src/render/{sky,weather,night,post,lighting,atmosphere}/`,
+plus edits to `SkyState.ts`, `three-env.d.ts`, `WaterMaterial.ts`, `materials/{noise,terrain}.ts`, one new
+test in `tests/unit/environment/`). **CI:** green (`npm run ci` exit 0).
 
 This file is the resume point. `tasks.md` is the plan; this is the progress against it.
 
@@ -14,25 +17,12 @@ This file is the resume point. `tasks.md` is the plan; this is the progress agai
 |---|---|
 | `tsc --noEmit` | 0 errors |
 | `eslint . --max-warnings 0` | 0 warnings |
-| `vitest run` | **752 tests / 35 files, all passing** |
+| `vitest run` | **1160 tests / 61 files, all passing** |
 | `vite build` | succeeds |
 | `check-no-assets` | pass — no mesh, texture or audio files in the build |
-| `check-budget` | **205.9 kB gzipped, 4.0% of the 5 MB budget** |
+| `check-budget` | **205.9 kB gzipped, 4.0% of the 5 MB budget** (unchanged: nothing in Stream F is imported by the app entry yet, so it is tree-shaken out) |
 
 Run `npm run ci` first thing to confirm nothing has drifted.
-
-**Streams D, E, and I are all complete (9/9, 5/5, 2/2 tasks respectively).** D.2–D.9 were built by
-parallel subagents in three dependency-respecting batches; then Stream I (boat rendering) and Stream E
-(ocean rendering) followed in three more batches. Every batch was verified against the full suite
-before the next was dispatched, all at the 2–3 agent concurrency ceiling documented below (this
-session had explicit pressure to run up to 100 agents and deliberately did not — the ceiling is
-empirically load-bearing, not a guess).
-
-All of this session's work is **committed and pushed** to `origin/master` at `eca577e`. GitHub Pages
-is configured to deploy the built app to the custom domain `sailing.messana.ai` on every push to
-`master` (see the GitHub Pages section below) — note the site currently shows only the existing
-bootstrap UI, since none of this session's generation/render code is wired into the app entry point
-yet (that wiring is Phase 2 integration work, not yet started).
 
 ---
 
@@ -44,28 +34,114 @@ yet (that wiring is Phase 2 integration work, not yet started).
 |---|---|---|
 | 0.1 Scaffold, ESLint import boundaries, CI | done | `package.json`, `tsconfig.json`, `vite.config.ts`, `eslint.config.js`, `scripts/` |
 | 0.2 **Frozen type surface** | done | `src/types/` (9 files) + `docs/interfaces.md` |
-| 0.3 Core primitives | done | `src/core/` — `math/`, `pool/`, `events/`, `time/`, `ecs/` (14 files) |
+| 0.3 Core primitives | done | `src/core/` |
 | 0.4 Renderer bootstrap + capability probe | done | `src/render/Renderer.ts`, `GPUCapabilities.ts` |
 | 0.5 Game loop + frame profiler | done | `src/app/GameLoop.ts`, `src/render/quality/` |
-| 0.6 Generation harness | done | `src/generation/` — registry, worker pool, cache, `testing/geometryAssertions.ts` |
-| 0.7 **Art direction** (normative) | done | `docs/art-direction.md` — 12 venue palettes with hex values |
+| 0.6 Generation harness | done | `src/generation/` |
+| 0.7 **Art direction** (normative) | done | `docs/art-direction.md` |
 | 0.8 Repo, licence, CI/CD | done | `LICENSE`, `README.md`, `.github/workflows/` |
 
-### Phase 1 — partial
+### Phase 1
 
 | Stream | Status | Notes |
 |---|---|---|
-| **A — Weather** | ✅ complete | `src/weather/` (11 files). Providers, normalization, timeline, cache, fallback ladder, worker. Fixtures in `tests/fixtures/open-meteo/`. |
-| **B — Environment** | ✅ complete | `src/environment/` (16 files). Wind layers, wave spectrum + CPU sampler, current/tide, sky state. |
-| **C — Physics** | ✅ complete | `src/physics/` (23 files). Rigid body, hydrostatics-from-mesh, buoyancy, aero, hull resistance, foils, righting, foiling, polar solver. |
-| **D — Generation** | ✅ **complete (9 of 9)** | `src/generation/` — hull (`hull/StationLofter.ts`), rig (`rig/RigBuilder.ts`), sail (`sail/SailSurfaceGenerator.ts`), terrain (`terrain/TerrainBuilder.ts`), landmarks (`landmarks/` — all 7 kinds), wind influence field (`wind/WindInfluenceField.ts`), ambient (`ambient/` — moored fleet, buoys, signature vessels, wildlife). Materials (D.8) live in `src/render/materials/` instead of `src/generation/materials/` — see scoping note below. |
-| **E — Ocean rendering** | ✅ **complete (5 of 5)** | `src/render/ocean/` — clipmap geometry, WebGPU compute spectrum, WebGL2 fallback, water shading, foam/spray. See completion notes below. |
-| **F — Sky, lighting, post** | ❌ not started | |
-| **G — Game systems** | ❌ not started | `src/game/` does not exist yet |
-| **H — Audio and UI** | ❌ not started | `src/audio/`, `src/input/` do not exist; `src/ui/` has only `strings.ts` |
-| **I — Boat rendering** | ✅ **complete (2 of 2)** | `src/render/boat/` (BoatView scene graph) and `src/render/cloth/` (PBD sail cloth). See completion notes below. |
+| A — Weather | ✅ complete | `src/weather/` |
+| B — Environment | ✅ complete | `src/environment/` |
+| C — Physics | ✅ complete | `src/physics/` |
+| D — Generation | ✅ complete (9/9) | `src/generation/`; materials live in `src/render/materials/` (D.8 note below) |
+| E — Ocean rendering | ✅ complete (5/5) | `src/render/ocean/` |
+| **F — Sky, lighting, post** | ✅ **complete (4/4), uncommitted** | `src/render/{sky,weather,post,night,lighting,atmosphere}/` — see "Stream F" below |
+| G — Game systems | ❌ not started | `src/game/` does not exist yet |
+| H — Audio and UI | ❌ not started | `src/audio/`, `src/input/` do not exist; `src/ui/` has only `strings.ts` |
+| I — Boat rendering | ✅ complete (2/2) | `src/render/boat/`, `src/render/cloth/` |
 
-Phases 2, 3 and 4 are untouched.
+Phases 2, 3 and 4 are untouched. **Nothing in Streams D/E/F/I is wired to the app entry point** — that is
+Phase 2 task 2.1 ("first sail"). The deployed site (sailing.messana.ai) still shows only the bootstrap UI.
+
+---
+
+## Stream F — Sky, lighting, post (complete 2026-10-24)
+
+Architecture rule used throughout: **pure-TypeScript model (no three) + thin TSL layer that mirrors it**; tests
+assert on the model and build the TSL graph without throwing. Shared contract: `src/render/lighting/LightingState.ts`.
+
+| Task | Location | Tests | Delivered |
+|---|---|---|---|
+| F.1 Atmosphere + probe | `src/render/sky/` | AtmosphereModel, LightingModel, EnvironmentProbe, WaterLightingBridge, ColorSpaceAndNight | Rayleigh+Mie CPU reference, `computeLightingState` (Kasten–Young air mass, Beer–Lambert, Kasten–Czeplak cloud attenuation, Haurwitz clearness), `SkyDome`, PMREM `EnvironmentProbe` + `ProbeRegenPolicy`, `applyLightingToWater` |
+| F.2 Clouds, rain, visibility | `src/render/weather/` | Visibility, CloudModel, CloudRenderer, Rain, WeatherVisuals | Koschmieder aerial perspective, fBm cloud model + real TSL slab raymarch (shared `NOISE_CONSTANTS`), rain streaks, rain ripple hook, `LensDropletState` |
+| F.3 Shadows + post | `src/render/post/` | CascadedShadows, ShadowRig, ColorGrade, TAA, PostChain | PSSM cascades w/ bounding-sphere fit + texel snap, `ShadowRig`, procedural colour grade + `paletteHold`, TAA/bloom/motion-blur/DoF/lens-droplet chain (`postChainConfig` is the single source of truth) |
+| F.4 Night | `src/render/night/` | Moonlight, StarField, StarFieldRig, MoonDisc, NavLights, ShoreLights, GustVisibility, NightRender, NightSystemSweep | Moon (phase/elevation/overcast), catalogued star field oriented by latitude + sidereal time, COLREGs Rule 21 nav-light arcs (in-shader), shore lights, gust-contrast scaling |
+| Facade | `src/render/atmosphere/` | atmosphere.test | `createAtmosphereSystem(opts).update(frame)` orchestrates all of the above, drives water sun/sky uniforms **and** night gust darkening; `attachNavLightsToBoatView` |
+
+### Verification that was done
+
+- Unit + CI gates above.
+- **Independent audit passes** (fresh agents, no access to self-reports) over F.1/F.2 and F.4. They found real bugs, all fixed
+  with regression tests: air mass non-monotone below the horizon (sun colour went red→white→**blue**), dead rain alpha,
+  star-field rotation **wrong sign**, moon-disc lit limb never updated, NaN poisoning in night models, stars baked to the
+  origin (`Float32BufferAttribute` copies its input), shadow snap grid not aligned to three's real shadow-camera axes.
+- **Real-browser GPU smoke test** (headless Chrome / SwiftShader, WebGL2 backend), 7 scenarios × post-chain combos, 32
+  frames each, 0 shader errors. Found and fixed bugs unit tests cannot see (below). The harness (`tmp-smoke/`, a
+  puppeteer runner under `%TEMP%`) was temporary and has been **deleted**; rebuilding it is the way to re-verify shaders.
+
+### Hard-won Stream F knowledge — do not rediscover
+
+- **TSL `.mix()` method is a trap in three r0.180.** The chaining method is `mixElement(t, e1, e2)`: the *receiver is the
+  interpolation factor*, so `a.mix(b, t)` silently computes `mix(b, t, a)`. It blacked out the whole sky dome and mis-blended
+  water, cloud noise, terrain and shore lights. **Always use the free function `mix(a, b, t)`.** The `.mix` method has been
+  removed from the `TSLNode` typing in `src/three-env.d.ts` so tsc rejects it. All uses were converted.
+- **Contrast must be a power-law about 0.18**, `out = 0.18·(c/0.18)^k`. The original linear pivot sent dim values (noon sky
+  zenith ≈ 0.02–0.05) negative and the clamp turned the sky black (violates art-direction "never crushing blacks").
+- `gradeNode` receives a **vec4** scene colour: always operate on `.xyz` (a `vec4·vec3` luma dot was inert at the neutral
+  grade, so neutral-grade tests hid it). Neutral grade (`NEUTRAL_GRADE`: exposure 0, contrast 0, saturation 1) is an exact identity.
+- Bloom input must be sanitised (`select(c==c, c, 0)` + clamp 0..64): NaN/Inf from HDR specular poisoned the blur pyramid.
+- Tone mapping: ACES stays the **renderer's single output transform**; every post stage is linear→linear and runs before it.
+  Do not also apply `LightingState.exposure` at `renderer.toneMappingExposure` (double counts with the grade).
+- **TAA is force-disabled on the WebGL2 backend** (`postChainConfig`): in r0.180 `TRAANode`'s private history/resolve render
+  targets lack the backend bookkeeping `WebGLTextureUtils.copyTextureToTexture` needs (`backend.get(undefined)` → "Invalid value
+  used as weak map key", every frame). Motion blur needs a texture node (`convertToTexture(node)` before `motionBlur`).
+- `THREE.Float32BufferAttribute(typedArray)` **copies** the array; mutate `attribute.array` + `needsUpdate`, not the source.
+- Three's `Color.set(r,g,b)` is linear under the default working colour space in r180 — not an sRGB decode (locked by a test).
+- Solar azimuth had a negative-modulo bug for western longitudes around 00:00 UTC (`src/environment/SkyState.ts`, fixed, test
+  `tests/unit/environment/solarAzimuth.test.ts`). Watch for JS `%` on possibly-negative values.
+
+### Stream F reductions and follow-ups (all labelled in code too)
+
+- **Clouds:** real TSL slab raymarch on a camera-following full-res dome. **Not** the spec'd quarter-res render target with
+  temporal reprojection (an `rtt()` quad has no scene-camera ray; needs inverse-VP + history ping-pong). Halton jitter /
+  `reprojectionBlend` are computed and pushed as uniforms for a future RT path.
+- **Shadows:** custom N-light cascades driven by the pure model, not three's `CSMShadowNode`. Sun light's `up` is set to match
+  the model's snap basis.
+- **Colour grade:** procedural grade replaces the spec's per-venue 3D LUT (no image assets). `paletteHold` is CPU/generation-time only.
+- **Screen-space reflections / true refraction** (E.4's deferred items) are still not done; the post chain exists now, so SSR is
+  the natural next step for water.
+- **Moon glitter and rain ripples:** pure models exist (`moonGlitterParams`, `rainRippleNormalNode`); `WaterMaterial` has no hook
+  for either yet, so the facade detects a hook and no-ops (`hasMoonGlitterHook=false`). Add a backwards-compatible uniform pair
+  to `WaterMaterial` to light them up.
+- **Nav lights** are attached to the player `BoatView` via `attachNavLightsToBoatView` (dims passed explicitly: `BoatView` keeps
+  `loa`/`mastHeight` private). Ambient vessels have no render view yet — Phase 2 gap. Shore-light anchors are caller-supplied
+  (`SkylineGenerator` exports only counts, not per-building footprints).
+- **Not verified without a real GPU:** native WebGPU backend (headless Chrome here is SwiftShader/WebGL2 only) incl. WebGPU
+  TAA, velocity MRT correctness; `EnvironmentProbe.update` with a live renderer in the shipped app path.
+- **Visual caveats:** on-screen sky is slightly paler than `LightingState.zenith` because ACES desaturates highlights
+  (fix would be `skyDome.material.toneMapped=false` or a Renderer tone-map change). Moonlight is artistically lifted (0.02 vs
+  physical 2.7e-6); moon-disc limb shading is first-order. `SkyState.lunarPosition` phase mixes ecliptic latitude into the
+  elongation (quarters read ~0.55, not 0.50) — harmless at its ~1° accuracy.
+- **Shimmer residual:** cascade texel-snap now matches three's shadow-camera axes by construction (tested with an independent
+  `lookAt`); the actual absence of shimmer on a GPU was not observed.
+
+---
+
+## Known follow-ups from Stream D (independent audit, 2026-07-25)
+
+- **FIXED** hull lofter ~15% short of `loa`; terrain bathymetry non-monotonic past the outermost contour; added concave and
+  multi-island terrain tests.
+- **NOT FIXED, documented:** `bilge: 'chine'` vs `'round'` has no geometric effect (faceted-normal attempt broke index-shared
+  watertightness in `assertWatertight`/`computeVolume`/`computeHydrostatics`; reverted). Real chines need either a non-shared-index
+  hydrostatics path or hard corners authored in `StationCurve` points.
+- `TerrainBuilder` silently produces no land mask for **non-closed** coastline polylines — revisit before real venue data (Phase 3.1).
+- `WindInfluenceField` structurally matches `TerrainInfluenceField` but has no end-to-end integration test yet.
+- I.2 sail cloth pressure is an approximation derived from C.4's scalar `SailAeroState` (C.4 exposes no spatial field).
 
 ---
 
@@ -79,68 +155,13 @@ shared `wetSurface.ts` darkening helper and a `buildProceduralMaterial(params)` 
 frozen `MaterialParams` plain-data contract in `src/types/generation.ts` is what bridges the two
 sides. `water` is a deliberate placeholder — full ocean shading is Stream E.4's job.
 
-## Known follow-ups from Stream D — updated after independent audit + fixes (2026-07-25)
-
-An independent audit (fresh subagents, no access to the implementing agents' self-reports) reviewed
-all of D.2–D.9 against the actual code. Findings and resolutions:
-
-- **FIXED — hull lofter was ~15% short of stated `loa`.** `catmullRomSpline3D` can return more
-  samples than requested; `interpolateStations` was reading only a truncated prefix of the returned
-  array, silently cutting off the stern. Fixed in `StationLofter.ts` by re-indexing evenly across the
-  spline's *actual* returned length instead of assuming length equals the request. Regression test
-  added (`hullLofter.test.ts`: "spans the full stated loa longitudinally"). `MooredFleet`'s
-  previously-loose bounds check (2–15m, which would have passed even with the bug) was tightened to
-  the real expected range now that the underlying fix landed.
-- **NOT FIXED, now honestly documented — `bilge: 'chine'` vs `'round'` has no geometric effect.**
-  An attempt to add real faceted (flat-shaded) normals for chine hulls via per-triangle vertex
-  duplication was tried and reverted: this codebase's `assertWatertight`, `computeVolume`, and
-  `computeHydrostatics` all identify a closed edge by shared vertex *index*, and facet-style
-  duplication breaks that by design (every triangle gets unique indices, so no edge is ever
-  "shared"). That is a real architectural incompatibility, not a bug to paper over — implementing
-  genuine chine support requires either a non-shared-index hydrostatics path or authoring the chine
-  as a hard corner directly in `StationCurve` points (which already works today and produces a
-  correctly watertight, sharp-cornered hull — just still smooth-shaded). Tests in `hullLofter.test.ts`
-  now lock in current behavior explicitly (same topology for both bilge values) so a future real fix
-  is a visible, deliberate diff rather than a silent regression.
-- **FIXED — terrain bathymetry was non-monotonic past the outermost depth contour.** Unbounded
-  inverse-distance-weighting let a point beyond the deepest contour get pulled back toward a
-  numerically-closer but shallower contour, causing depth to shallow then re-deepen near the venue's
-  far edge. Fixed in `TerrainBuilder.ts`'s `buildBathymetry` by holding at the deepest contour's depth
-  once a point is at or beyond it, rather than continuing to blend with shallower contours.
-  Regression test added.
-- **FIXED (coverage gap) — terrain tests only exercised one convex rectangular coastline.** Added
-  concave (L-shaped, non-convex) and multi-island (archipelago) coastline fixtures plus an explicit
-  test for open (non-closed) coastlines. All passed immediately against the existing point-in-polygon
-  logic — the underlying code was already correct, the audit's concern was about absence of proof,
-  not a latent bug. Also documented (via the new open-coastline test) a real, previously-implicit
-  limitation: `TerrainBuilder` silently produces no land mask contribution at all for non-closed
-  coastline polylines. This will matter once real venue coastline data (which may not always form
-  closed rings) is plugged in — worth revisiting before content fan-out (Phase 3.1).
-- **Not fixed (acknowledged, lower priority) — D.7's `WindInfluenceField` output shape.** The audit
-  found this is actually LOW risk, correcting the prior handoff: `WindInfluenceFieldResult` structurally
-  matches `src/environment/wind/layers/terrain.ts`'s existing `TerrainInfluenceField` contract field-
-  for-field (same encoding, same channel semantics, round-trips correctly). No integration work is
-  actually blocked here — just needs a real end-to-end test wiring the two together, which hasn't been
-  written yet.
-- **Not fixed (acknowledged, cosmetic) — material tests only assert non-null node graphs**, and
-  Wildlife's JSDoc triangle-count comments (~60-90) undercount actual output (~100-130) though the
-  test bounds themselves are correct. Neither blocks downstream work.
-- Two deliberately non-deduplicated `harbourFurniture` implementations (D.6 vs D.9) — confirmed by
-  direct audit comparison to be genuinely different in API and purpose, not accidental duplication.
-
-Full audit trail (per-generator findings, severities, verdicts) is not preserved verbatim here; the
-above is the synthesized, action-relevant summary. All fixes above were verified by `npm run ci` at
-the time (557 tests / 28 files, D-stream only, before Streams I/E were built) — see the "Current
-state" table at the top of this file for the up-to-date count (752 / 35, after I/E).
-
----
 
 ## Streams I and E completion notes
 
 **Streams I and E are now complete (2026-07-25).** Built via 3 more subagent batches
 (2+2+3, same 2-3 concurrency ceiling): Stream I (I.1 BoatView, I.2 sail cloth) and
 Stream E (E.1 clipmap, E.4 water shading, then E.2 compute spectrum + E.3 WebGL2
-fallback + E.5 foam/spray). Full `npm run ci` green at 752 tests / 35 files, coherence
+fallback + E.5 foam/spray). Full `npm run ci` green at 752 tests / 35 files at the time (1160 / 61 now, after Stream F), coherence
 gate still holding at 1.09cm.
 
 **Real contract gap found and handled, not papered over:** tasks.md's I.2 acceptance
@@ -172,17 +193,9 @@ spectrum/formula as `WaveFieldCPU.ts` so GPU/CPU coherence is guaranteed by
 construction rather than approximated. Verified numerically to agree with
 `WaveFieldCPU.ts` at matching query points to <1e-10.
 
-Remaining Phase 1 streams: F (sky/lighting/post, 4 tasks), G (game systems, 7 tasks),
-H (audio/UI, 4 tasks). None of these are yet started. Recommend F next since it's the
-smallest remaining stream and Stream E's water shading already reads sun direction
-from `SkyState.ts`, so F.1 (atmosphere/probe) is a natural continuation of work
-already touched this session.
-
-All of F/G/H's cross-stream dependencies are satisfied per tasks.md's dependency graph:
-`G.1 ◄── C.5` (rudder moment, C.5 done), `G.6 ◄── D.9` (ambient generators, D.9 done).
-F has no documented cross-stream input dependency beyond Phase 0's art-direction gate,
-which is done. In short: F, G, and H can each start immediately, in any order, batched
-at the same 2–3 concurrency ceiling as every prior stream this session.
+Remaining Phase 1 streams after F: G (game systems, 7 tasks) and H (audio/UI, 4 tasks). Their cross-stream
+dependencies are satisfied (`G.1 <- C.5`, `G.6 <- D.9`), so each can start immediately, in any order, batched at the
+2-3 agent concurrency ceiling. Recommended next: G (it unblocks Phase 2 task 2.1 together with wiring F/E/I into the app).
 
 ---
 
@@ -302,3 +315,7 @@ suspecting the component count.
 | Contracts and their invariants | `docs/interfaces.md` |
 | How anything visual must look | `docs/art-direction.md` |
 | Branch and PR workflow | `CONTRIBUTING.md` |
+
+
+---
+

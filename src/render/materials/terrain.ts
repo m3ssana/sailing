@@ -18,7 +18,7 @@
  */
 
 import * as THREE from 'three/webgpu';
-import { uniform, vec3, float, positionLocal, normalLocal } from 'three/tsl';
+import { uniform, vec3, float, mix, positionLocal, normalLocal } from 'three/tsl';
 import type { MaterialParams } from '@/types';
 import { hash3D } from './noise';
 import { applyWetSurface } from './wetSurface';
@@ -53,7 +53,7 @@ export function buildTerrain(params: MaterialParams): THREE.MeshStandardNodeMate
   const altitudeShift = vec3(altitude, altitude, altitude);
 
   // Blend base colour with rock based on slope
-  const terrainColor = baseColor.add(altitudeShift).mix(rockColor, slopeFactor);
+  const terrainColor = mix(baseColor.add(altitudeShift), rockColor, slopeFactor);
 
   // Add very subtle noise to break uniformity (within §3.3 limits)
   const noisePos = positionLocal.mul(5.0);
@@ -61,7 +61,7 @@ export function buildTerrain(params: MaterialParams): THREE.MeshStandardNodeMate
   const colorNode = terrainColor.add(vec3(terrainNoise, terrainNoise, terrainNoise));
 
   // Roughness: blend between base and rock roughness based on slope
-  const roughnessNode = roughness.mix(float(rockRoughness), slopeFactor);
+  const roughnessNode = mix(roughness, float(rockRoughness), slopeFactor);
 
   // Apply wet-surface darkening
   const wet = applyWetSurface(colorNode, roughnessNode, wetness);
