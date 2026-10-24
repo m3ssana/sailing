@@ -61,7 +61,12 @@ import {
   cameraPosition,
 } from 'three/tsl';
 import type { TSLNode } from 'three/tsl';
-import type { WaterAppearance } from '@/types';
+import type { WaterAppearance, WaveComponent } from '@/types';
+import {
+  buildGerstnerPositionNode,
+  buildGerstnerNormalNode,
+  buildDistanceRoughnessNode,
+} from './SpectrumFallback';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -115,6 +120,46 @@ export interface WaterMaterialParams {
    * In practice, updated per-frame from WaveField data or vertex displacement.
    */
   waveHeight?: number;
+
+  /**
+   * The wave component table (the SAME `WaveField.components` the physics
+   * samples). When supplied, the material gains a vertex `positionNode` that
+   * displaces the surface by a Gerstner sum over these components, and an
+   * analytic `normalNode` for the displaced surface — so the visible sea moves
+   * with, and shades/glitters consistently with, the physics wave field
+   * (requirement 4.12). When omitted, the surface stays flat (back-compatible).
+   */
+  waveComponents?: readonly WaveComponent[];
+
+  /**
+   * The shared session-time uniform (seconds) that drives the wave phase. MUST
+   * be the same clock the physics `WaveField` is evaluated at, or the visible
+   * surface and the boat will drift out of phase. Required iff `waveComponents`
+   * is supplied; ignored otherwise.
+   */
+  waveTimeUniform?: TSLNode & { value: unknown };
+
+  /**
+   * Local vertex spacing (world metres between adjacent vertices) of the ocean
+   * ring this material is assigned to. Enables PER-RING BAND-LIMITING: wave
+   * components whose wavelength is too short to be resolved at this spacing are
+   * faded out of both the displacement and the normal, which removes the radial
+   * aliasing streaks the coarse far rings produced. On the near ring
+   * (spacing ≈ 0.5 m) every real component is kept, so the boat still sits in
+   * the full-resolution sea (req 4.12 coherence preserved). Omit (or 0) to keep
+   * every component — the original, un-band-limited behaviour.
+   */
+  vertexSpacing?: number;
+
+  /**
+   * Shared camera world-position uniform (a `three/tsl` `uniform(Vector3)`).
+   * When supplied alongside `waveComponents`, the surface normal is faded toward
+   * flat (0,1,0) with distance and the specular roughness is widened Toksvig-
+   * style with distance, so the far sea reads as a smooth sky-reflecting haze
+   * band at the horizon instead of a field of aliased glints. The caller MUST
+   * update `.value` to the camera position each frame.
+   */
+  cameraPositionUniform?: TSLNode & { value: unknown };
 }
 
 /**
@@ -150,6 +195,43 @@ export interface WaterMaterialResult {
  */
 export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialResult {
   const { appearance } = params;
+
+  // ─── Wave displacement + normal (shared physics component table) ──────────
+  // When the caller passes the environment's wave components + the shared
+  // session-time uniform, the surface is displaced per-vertex by the SAME
+  // Gerstner sum the CPU WaveField uses, and lit with its analytic normal. This
+  // is what makes the visible sea agree with the physics within 5 cm (req 4.12).
+  const waveComponents = params.waveComponents;
+  const waveTimeUniform = params.waveTimeUniform;
+  const vertexSpacing = params.vertexSpacing ?? 0;
+  const cameraPositionUniform = params.cameraPositionUniform;
+  const hasWaves =
+    waveComponents !== undefined &&
+    waveComponents.length > 0 &&
+    waveTimeUniform !== undefined;
+  const wavePositionNode: TSLNode | undefined =
+    hasWaves && waveComponents !== undefined && waveTimeUniform !== undefined
+      ? buildGerstnerPositionNode(waveComponents, waveTimeUniform, vertexSpacing)
+      : undefined;
+  const waveNormalNode: TSLNode | undefined =
+    hasWaves && waveComponents !== undefined && waveTimeUniform !== undefined
+      ? buildGerstnerNormalNode(waveComponents, waveTimeUniform, {
+          spacing: vertexSpacing,
+          ...(cameraPositionUniform !== undefined
+            ? { cameraPosition: cameraPositionUniform }
+            : {}),
+        })
+      : undefined;
+  // A distance-based roughness-widening term (0 near → 1 far) for a Toksvig-
+  // style broadening of the specular lobe at range, so far glitter is not a
+  // field of sub-pixel needles. Only when a camera uniform is supplied.
+  const distanceRoughnessNode: TSLNode | undefined =
+    hasWaves && cameraPositionUniform !== undefined
+      ? buildDistanceRoughnessNode(cameraPositionUniform)
+      : undefined;
+  // The normal the shading math should use: the wave normal when displaced,
+  // else the geometry's (flat) world normal.
+  const surfaceNormal: TSLNode = waveNormalNode ?? normalWorld;
 
   // ─── Uniforms ─────────────────────────────────────────────────────────────
 
@@ -195,7 +277,7 @@ export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialRe
 
   const fresnelNode: TSLNode = Fn(() => {
     const viewDir = cameraPosition.sub(positionWorld).normalize();
-    const nDotV = normalWorld.dot(viewDir).saturate();
+    const nDotV = surfaceNormal.dot(viewDir).saturate();
     // Schlick: F0 + (1 - F0) * (1 - cos θ)^5
     const f0 = float(F0_WATER);
     const oneMinusNdotV = float(1.0).sub(nDotV);
@@ -210,8 +292,8 @@ export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialRe
   const reflectionColorNode: TSLNode = Fn(() => {
     const viewDir = cameraPosition.sub(positionWorld).normalize();
     // Reflect view direction: R = 2(N·V)N - V
-    const nDotV = normalWorld.dot(viewDir);
-    const reflected = normalWorld.mul(nDotV.mul(2.0)).sub(viewDir);
+    const nDotV = surfaceNormal.dot(viewDir);
+    const reflected = surfaceNormal.mul(nDotV.mul(2.0)).sub(viewDir);
     // Sample sky gradient based on reflected Y component (elevation)
     // Higher = zenith color, lower = horizon color
     const skyBlend = reflected.dot(vec3(0.0, 1.0, 0.0)).saturate();
@@ -238,7 +320,7 @@ export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialRe
     const viewDir = cameraPosition.sub(positionWorld).normalize();
     // Half-vector proxy for back-lighting: how much sun is behind the surface
     // relative to the viewer. Negative N·L means sun is behind the surface.
-    const nDotL = normalWorld.dot(uSunDirection);
+    const nDotL = surfaceNormal.dot(uSunDirection);
     // Transmission term: strongest when sun is behind surface (nDotL < 0)
     const transmission = float(0.0).sub(nDotL).clamp(0.0, 1.0);
     // View-dependent: strongest at grazing angles looking toward the sun
@@ -262,13 +344,22 @@ export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialRe
     const viewDir = cameraPosition.sub(positionWorld).normalize();
     // Half vector between view and light
     const halfDir = viewDir.add(uSunDirection).normalize();
-    const nDotH = normalWorld.dot(halfDir).saturate();
-    const nDotL = normalWorld.dot(uSunDirection).saturate();
-    const nDotV = normalWorld.dot(viewDir).saturate();
+    const nDotH = surfaceNormal.dot(halfDir).saturate();
+    const nDotL = surfaceNormal.dot(uSunDirection).saturate();
+    const nDotV = surfaceNormal.dot(viewDir).saturate();
 
     // GGX NDF: α² / (π * ((N·H)²*(α²-1)+1)²)
-    // Use very low roughness for glitter (sharp, sparkly highlights)
-    const alpha = float(0.03); // Very tight specular for glitter effect
+    // Roughness for glitter. On a FLAT plane a very tight α collapses the
+    // highlight to one over-concentrated blob (the defect seen in the first
+    // run); the wave normal now scatters it into a glittering path, and a
+    // slightly wider α (0.08) spreads each sparkle so the patch reads as a sun
+    // track rather than a single hotspot. Still within art-direction's sharp-
+    // specular intent. At range we widen α further (Toksvig) so far glints are
+    // a soft sheen, not aliased needles.
+    const alpha =
+      distanceRoughnessNode !== undefined
+        ? float(0.08).add(distanceRoughnessNode.mul(0.4))
+        : float(0.08);
     const alpha2 = alpha.mul(alpha);
     const nDotH2 = nDotH.mul(nDotH);
     const denom = nDotH2.mul(alpha2.sub(1.0)).add(1.0);
@@ -283,8 +374,9 @@ export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialRe
     const f0 = float(F0_WATER);
     const specFresnel = f0.add(float(1.0).sub(f0).mul(float(1.0).sub(nDotH).pow(5.0)));
 
-    // Sun glitter intensity
-    return uSunColor.mul(D.mul(vis).mul(specFresnel).mul(nDotL));
+    // Sun glitter intensity. Scaled down (0.35) so the broadened specular reads
+    // as a sparkling sun track rather than a broad silvery sheen washing the sea.
+    return uSunColor.mul(D.mul(vis).mul(specFresnel).mul(nDotL)).mul(0.35);
   })();
 
   // ─── Gust-texture surface darkening ───────────────────────────────────────
@@ -308,10 +400,16 @@ export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialRe
     const glitter = sunGlitterNode;
     const gustDarken = gustDarkeningNode;
 
-    // Base: blend between refracted/absorbed colour and reflected sky
-    // based on Fresnel term. Refraction approximation: we use the absorbed
-    // colour as the "seen through water" component.
-    const baseColor = mix(absorption, reflectionColor, fresnel);
+    // Base: blend between refracted/absorbed colour and reflected sky based on
+    // Fresnel. Turbid water (high turbidity) is NOT a clean mirror even at
+    // grazing angles — suspended matter scatters light back, so we CAP the
+    // reflectance by (1 − 0.55·turbidity). This keeps the green-blue body colour
+    // present across the whole surface (Newport is "green-blue turbid",
+    // art-direction §4.1) instead of the blown-out white sky sheen a full
+    // Fresnel gives when reflecting a bright overcast sky.
+    const reflectCap = float(1.0).sub(uTurbidity.mul(0.55));
+    const effFresnel = fresnel.mul(reflectCap);
+    const baseColor = mix(absorption, reflectionColor, effFresnel);
 
     // Add subsurface scattering (additive — crests glow)
     const withSSS = baseColor.add(sss);
@@ -331,11 +429,28 @@ export function buildWaterMaterial(params: WaterMaterialParams): WaterMaterialRe
 
   // Water roughness per art-direction.md §3.2: 0.0–0.05
   // Use a very low base roughness; the GGX glitter provides the perceptual
-  // roughness variation from wind-disturbed normals.
-  material.roughnessNode = float(0.02);
+  // roughness variation from wind-disturbed normals. At range we widen the
+  // roughness (Toksvig-style) so the far sea's unresolved sub-pixel ripples read
+  // as a broad, soft sky sheen rather than a field of aliased specular needles.
+  if (distanceRoughnessNode !== undefined) {
+    material.roughnessNode = float(0.02).add(distanceRoughnessNode.mul(0.33));
+  } else {
+    material.roughnessNode = float(0.02);
+  }
 
   // Water is non-metallic
   material.metalnessNode = float(0.0);
+
+  // Wave displacement (vertex) + analytic surface normal, when the component
+  // table was supplied. Both evaluate the SAME Gerstner sum as the physics
+  // WaveField at the shared session time, so the visible sea moves with the
+  // boat (req 4.12). Omitted → flat surface + geometry normal (back-compatible).
+  if (wavePositionNode !== undefined) {
+    material.positionNode = wavePositionNode;
+  }
+  if (waveNormalNode !== undefined) {
+    material.normalNode = waveNormalNode;
+  }
 
   return {
     material,

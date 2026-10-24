@@ -58,7 +58,7 @@ function setInstant(b: BoatSimulationBundle, c: Partial<ControlState>): void {
 function runTrajectory(def: BoatDefinition, id: string): TrajSummary {
   const bundle = createBoatSimulation(def, { id });
   const env = makeEnvironment(12);
-  bundle.sim.reset({ x: 0, y: -0.27, z: 0 }, EAST);
+  bundle.sim.reset({ x: 0, y: 0, z: 0 }, EAST);
   setInstant(bundle, { board: 1, mainsheet: 0.3, rudder: 0, hike: 0.6, crewLateral: -0.6 });
   const s = bundle.sim.state;
   let prevX = s.position.x;

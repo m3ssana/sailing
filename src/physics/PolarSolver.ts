@@ -115,11 +115,22 @@ function solveCell(boat: BoatSpec, tws: number, twa: number): number {
     if (speed < MIN_SPEED) speed = MIN_SPEED;
 
     // Compute apparent wind from TWS, TWA, and boat speed.
-    // AWA and AWS from the velocity triangle.
+    // Velocity triangle in the boat frame (bow = forward):
+    //   cross component (off the bow)   = tws·sin(twa)
+    //   along component (FROM the bow)  = tws·cos(twa) + speed
+    // The boat's own forward motion ADDS to the head-on component of the
+    // apparent wind, so the apparent wind always draws FORWARD (AWA < TWA) and
+    // AWS rises with boat speed on a reach — the defining feature of apparent
+    // wind. The previous `tws·cos(twa) − speed` had the boat-speed sign
+    // inverted, which on a beam reach made the computed AWA widen past 90° as
+    // the boat sped up so the drive term (lift·sin(awa) − drag·cos(awa)) GREW
+    // without bound and the solver ran away to the 2.5·TWS clamp (~30 kt). With
+    // the correct sign AWA shrinks as the boat accelerates, the drive component
+    // falls, and the cell converges to a physical speed.
     const awx = tws * Math.sin(twa); // Cross component
-    const awy = tws * Math.cos(twa) - speed; // Along component (forward)
+    const awy = tws * Math.cos(twa) + speed; // Along component (comes-from the bow)
     const aws = Math.sqrt(awx * awx + awy * awy);
-    const awa = Math.atan2(awx, awy); // Apparent wind angle
+    const awa = Math.atan2(awx, awy); // Apparent wind angle off the bow
 
     if (aws < 0.01) {
       speed = 0;
@@ -170,10 +181,11 @@ function solveCell(boat: BoatSpec, tws: number, twa: number): number {
     const cf = ittc57(speed, lwl);
     const frictionR = 0.5 * waterDensity * wettedSurface * speed * speed * cf;
 
-    // Residuary.
+    // Residuary (Froude/Delft convention: R_r = C_r·ρ·g·∇, non-dimensionalised
+    // by displacement weight — matches HydroResistance.ts; see the note there).
     const fn = froudeNumber(speed, lwl);
     const cr = sampleCurve(boat.residuaryCurve, fn);
-    const residuaryR = 0.5 * waterDensity * wettedSurface * speed * speed * cr;
+    const residuaryR = cr * boat.hydrostatics.displacement * PHYSICS_CONSTANTS.GRAVITY;
 
     // Induced drag from side force through the keel.
     const maxDraft = boat.foils.reduce((max, f) => Math.max(max, f.span), 1);

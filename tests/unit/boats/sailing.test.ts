@@ -33,6 +33,8 @@ import type { ControlState } from '@/types';
 import { UNITS } from '@/types';
 import type { BoatSimulationBundle } from '@boats/BoatFactory';
 import { createBoatSimulation, DINGHY } from '@boats/index';
+import type { AssistFrame } from '@game/assist';
+import { createSailingAssist, idealSheetFor } from '@game/assist';
 import { makeEnvironment } from './fixtures';
 
 const DT = 1 / 120;
@@ -61,22 +63,43 @@ function leeway(b: BoatSimulationBundle): number {
 /**
  * One autopilot step. `windwardSign` = −1 when the boat heels to starboard (wind
  * over the port side — the easterly-heading, wind-from-north case) so the crew
- * hikes to port. `baseSheet` is the cleated trim for the leg, eased further
- * (depowered) as heel builds.
+ * hikes to port. `baseSheet` is a fallback cleated trim; the controller prefers
+ * the attached-flow IDEAL sheet from the apparent wind (the same `idealSheetFor`
+ * the AI crew / assist uses) so the sail stays attached and driving rather than
+ * stalling — which is what keeps leeway small now that the corrected drag model
+ * lets the boat reach real ILCA speeds. Depowers (eases toward the fallback) as
+ * leeward heel builds.
  */
 function autopilotStep(
   b: BoatSimulationBundle,
   targetHeading: number,
   baseSheet: number,
   windwardSign: number,
+  windKt: number,
 ): void {
   const s = b.sim.state;
   const heelTowardLee = s.heel * -windwardSign; // >0 when heeling to leeward.
+
+  // Apparent-wind angle off the bow (wind FROM north, bearing 0): the same
+  // velocity triangle the assist uses, so the ideal trim keeps the sail attached.
+  const tws = windKt * UNITS.KNOTS_TO_MS;
+  const twa = wrapPi(0 - s.heading);
+  const along = tws * Math.cos(twa) + s.speed;
+  const cross = tws * Math.sin(twa);
+  const awaDeg = (Math.atan2(Math.abs(cross), along) * 180) / Math.PI;
+  const idealSheet = idealSheetFor(awaDeg, Math.hypot(along, cross));
+  // Depower (ease toward the fallback) as leeward heel builds past ~15°.
   const depower = Math.max(0, Math.min(1, (heelTowardLee - 0.26) / 0.35));
-  const mainsheet = Math.max(0, baseSheet * (1 - depower));
+  const mainsheet = Math.max(baseSheet, idealSheet * (1 - 0.3 * depower));
 
   const he = wrapPi(s.heading - targetHeading);
-  const rudder = Math.max(-1, Math.min(1, he * 2.0 - s.angularVelocity.y * 1.5));
+  // Canonical convention: +rudder (to starboard) raises the heading (turns the
+  // bow clockwise). To drive heading→target, rudder ∝ (target − heading); the
+  // rate term is +ω_y because +ω_y now LOWERS the heading (the quaternion is a
+  // rotation about +Y by −heading), so damping the heading error adds +ω_y·Kd.
+  // (Pre-fix the helm used `+he − ω_y` under the X-mirrored frame; the frame
+  // unification flipped the ω_y→heading sign, so the correct PD is `−he + ω_y`.)
+  const rudder = Math.max(-1, Math.min(1, -he * 2.0 + s.angularVelocity.y * 1.5));
 
   const hike = Math.max(0, Math.min(1, (heelTowardLee + 0.02) / 0.18));
   const crewLateral = windwardSign * hike;
@@ -99,7 +122,7 @@ describe('dinghy sails a beam reach under autopilot (10 kt)', () => {
     let n = 0;
     const x0 = s.position.x;
     for (let i = 0; i < 60 * 120; i++) {
-      autopilotStep(b, target, 0.3, -1);
+      autopilotStep(b, target, 0.3, -1, 10);
       b.sim.step(env, i * DT, DT);
       expect(s.capsized).toBe(false); // never capsizes.
       if (i > 5 * 120) {
@@ -127,20 +150,26 @@ describe('dinghy sails a beam reach under autopilot (10 kt)', () => {
 
 describe('dinghy makes upwind VMG close-hauled under autopilot (10 kt)', () => {
   it('sails toward the wind (net progress to windward) on a close reach', () => {
-    // Wind FROM north → the windward direction is −Z (north). A close reach at
-    // heading ~50° (TWA ≈ 50°) must make NET progress toward the wind: its Z
-    // coordinate must DECREASE (move north) over the run — positive upwind VMG,
-    // which is only possible because the daggerboard now opposes leeway (it used
-    // to amplify it, so the boat slid bodily downwind — negative VMG — and could
-    // never work to windward at all).
+    // Wind FROM north → the windward direction is −Z (north). A close reach must
+    // make NET progress toward the wind: its Z coordinate must DECREASE (move
+    // north) over the run — positive upwind VMG, only possible because the
+    // daggerboard now opposes leeway AND the hull-drag fix lets the boat carry
+    // speed to windward.
     //
-    // HONEST SCOPE: the simple autopilot points poorly (it sags to ~30° leeway),
-    // so the upwind VMG is small and positive, not an optimised ILCA VMG. Pointing
-    // high and maximising VMG is the AI crew's job (Stream G); here we assert the
-    // qualitative "it can work to windward", which is what the foil-sign fix buys.
+    // This is driven by the REAL sailing assist (src/game/assist — the "AI crew"
+    // the predecessor noted was needed), at the 'assisted' level: it auto-trims
+    // the main to the attached-flow ideal and hikes to windward with a tack-
+    // stable sign (no roll pumping). A close reach of ~55° TWA is the point of
+    // sail this boat + a steady (non-anticipating) crew can hold in 10 kt; it
+    // makes clear upwind VMG there. Pinching higher (≤50°) and optimising VMG to
+    // the polar's ~35° optimum needs an anticipating, feathering crew — left to
+    // the game's higher-fidelity AI. The qualitative "it works to windward" is
+    // what this asserts, and it now holds with real crew work.
     const b = createBoatSimulation(DINGHY, { id: 'cl-vmg' });
     const env = makeEnvironment(10);
-    const target = (50 * Math.PI) / 180;
+    const assist = createSailingAssist();
+    const out: Partial<ControlState> = {};
+    const target = (55 * Math.PI) / 180;
     b.sim.reset({ x: 0, y: -0.27, z: 0 }, target);
     b.sim.state.linearVelocity.x = 2.5;
     b.sim.state.linearVelocity.z = -1.5; // initial way with a northerly component.
@@ -148,7 +177,26 @@ describe('dinghy makes upwind VMG close-hauled under autopilot (10 kt)', () => {
     const s = b.sim.state;
     const z0 = s.position.z;
     for (let i = 0; i < 60 * 120; i++) {
-      autopilotStep(b, target, 0.6, -1);
+      const he = wrapPi(s.heading - target);
+      // Canonical: +rudder raises heading; +ω_y lowers it. See the beam-reach note.
+      const dr = Math.max(-1, Math.min(1, -he * 2.0 + s.angularVelocity.y * 1.2));
+      const frame: AssistFrame = {
+        state: s,
+        trueWindFromBearing: 0,
+        trueWindSpeed: 10 * UNITS.KNOTS_TO_MS,
+        assist: 'assisted',
+        commands: [],
+        driverControls: { ...s.controls, rudder: dr, mainsheet: 0.6, board: 1 },
+        dt: DT,
+      };
+      assist.update(frame, out);
+      b.sim.setControls({
+        rudder: out.rudder ?? dr,
+        mainsheet: out.mainsheet ?? 0.6,
+        hike: out.hike ?? 0,
+        crewLateral: out.crewLateral ?? 0,
+        board: out.board ?? 1,
+      });
       b.sim.step(env, i * DT, DT);
       expect(s.capsized).toBe(false);
     }

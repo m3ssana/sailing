@@ -24,7 +24,7 @@
  */
 
 import type { Environment, Seed } from '@/types';
-import type { VenueDefinition, WeatherSnapshot } from '@/types';
+import type { VenueDefinition, WeatherSnapshot, WaveField } from '@/types';
 import { createEnvironment } from '@environment/index';
 import { WeatherServiceImpl } from '@weather/index';
 import { generateWindInfluenceField } from '@generation/wind/WindInfluenceField';
@@ -55,6 +55,14 @@ export interface CreateVenueEnvironmentOptions {
   terrainResolution?: number;
   /** Wind influence field resolution per axis (default 128 for headless use). */
   windResolution?: number;
+  /**
+   * An explicit wave field to use for this environment. When omitted, the
+   * frozen `createEnvironment` falls back to its flat-water stub (zero waves).
+   * The Session builds a real spectrum-derived `WaveField` from the snapshot's
+   * sea state and passes it here, so the physics AND the render clipmap share
+   * the SAME wave components (requirement 4.12). Additive / backward-compatible.
+   */
+  waveField?: WaveField;
 }
 
 /**
@@ -107,6 +115,7 @@ export function createVenueEnvironment(
     venue,
     seed,
     terrainField: windInfluence,
+    ...(options.waveField !== undefined ? { waveField: options.waveField } : {}),
     depthAt: (x, z) => terrain.depthAt(x, z),
     isLand: (x, z) => terrain.isLand(x, z),
     sessionStartEpochMs: nowMs,

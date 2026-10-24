@@ -74,6 +74,12 @@ export function integrateLinear(
  * so we recompute I_world_inv at the midpoint orientations. This captures
  * the coupling between roll angle and the effective inertia seen by the torque,
  * which is what makes near-capsize dynamics stable.
+ *
+ * INERTIA AXIS MAPPING (shared with BoatFactory.estimateInertia): the diagonal
+ * `localInertia` is in body axes forward=−Z, starboard=+X, up=+Y, so
+ *   localInertia.x = pitch (about body X), .y = yaw (about Y), .z = roll (about Z).
+ * `computeWorldInertiaInverse` rotates the body basis into world and applies
+ * `.x` about local X and `.z` about local Z, so the two agree by construction.
  */
 export function integrateAngularRK4(
   state: BoatState,

@@ -34,7 +34,7 @@ import type {
 } from '@/types';
 import { PHYSICS_CONSTANTS } from '@/types';
 import { vec3, zero3, copy3, addScaled3, rotateVec3 } from '@core/math';
-import { fromAxisAngle, normalizeQ } from '@core/math';
+import { quatFromHeading, normalizeQ } from '@core/math';
 import { clamp } from '@core/math';
 import {
   createBoatState,
@@ -204,8 +204,11 @@ export class BoatSimulationImpl implements IBoatSimulation {
     zero3(this.state.linearVelocity);
     zero3(this.state.angularVelocity);
 
-    // Build orientation from heading (rotation about +Y)
-    fromAxisAngle({ x: 0, y: 1, z: 0 }, heading, this.state.orientation);
+    // Build orientation from heading. CANONICAL: rotation about +Y by −heading
+    // (see quatFromHeading) so the quaternion's forward `rotateVec3(q,(0,0,−1))`
+    // equals the PHYSICAL `(sin h,0,−cos h)` the force generators use — the two
+    // frames are now one frame.
+    quatFromHeading(heading, this.state.orientation);
     normalizeQ(this.state.orientation, this.state.orientation);
 
     this.state.capsized = false;

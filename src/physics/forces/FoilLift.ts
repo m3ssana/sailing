@@ -25,6 +25,7 @@ import type { Vec3 } from '@/types/units';
 import { PHYSICS_CONSTANTS } from '@/types/units';
 import { vec3, set3, dot3, normalize3 } from '@core/math';
 import { saturate } from '@core/math';
+import { wrapAngleSigned } from '@core/math';
 import { foilLiftCoefficient, foilDragCoefficient } from '../coefficients/aeroCoefficients';
 import { MIN_SPEED } from '../constants';
 
@@ -64,8 +65,21 @@ export class FoilLift implements ForceGenerator {
 
     // Leeway angle: difference between heading and actual velocity direction.
     // Positive leeway = boat drifting to leeward (to starboard when on port tack).
+    //
+    // CRITICAL: `heading` is in [0, 2π) (headingFromQuat) but `velHeading` is in
+    // (−π, π] (atan2), so the raw difference `heading − velHeading` can be off by
+    // a full turn. It MUST be wrapped into (−π, π]. Without the wrap, a boat
+    // sailing on any heading in the upper half-circle (π, 2π) — e.g. heading
+    // 300° with the velocity nearly aligned — computes a leeway of ≈+2π instead
+    // of ≈0, which drives the foil lift/drag coefficients with a nonsense angle
+    // of attack. This is BOTH a port/starboard mirror-symmetry bug (the mirror
+    // of a small-positive heading lands near 2π, so the two tacks saw totally
+    // different leeway) AND a real bug in the shipped game (Newport spawns and
+    // sails on westerly/north-westerly headings > π, so the foils were being
+    // driven with a wrong alpha — a direct contributor to the capsize and the
+    // half-speed sailing). Regression: foilLeewayWrap + mirrorSymmetry tests.
     const velHeading = Math.atan2(linearVelocity.x, -linearVelocity.z);
-    const leeway = heading - velHeading; // Positive = boat slips to starboard
+    const leeway = wrapAngleSigned(heading - velHeading); // Positive = boat slips to starboard
 
     for (let i = 0; i < boat.foils.length; i++) {
       const foil = boat.foils[i];

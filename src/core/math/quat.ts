@@ -84,10 +84,54 @@ export function fromAxisAngle(axis: Vec3, angle: number, out: Quat = quat()): Qu
 }
 
 /**
- * Build a rotation from intrinsic yaw-pitch-roll, applied in that order.
+ * CANONICAL HEADING QUATERNION — the single engine-wide orientation convention.
  *
- * Yaw is about +Y (heading), pitch about +X (bow up positive), roll about -Z
- * (starboard down positive) to match the boat conventions in `BoatState`.
+ * ## The convention (see docs/interfaces.md and STATUS.md "Hard-won knowledge")
+ *
+ * Body axes: forward = −Z_body, starboard = +X_body, up = +Y_body. These form a
+ * right-handed frame: starboard = forward × up, i.e. (0,0,−1) × (0,1,0) = (1,0,0).
+ *
+ * World space is Y-up right-handed, +X east, +Z south, and a compass bearing
+ * increases CLOCKWISE seen from above. A boat at heading `h` (bearing) points its
+ * bow along the PHYSICAL forward `(sin h, 0, −cos h)` — the SAME vector
+ * `bearingToDirection(h)` returns and the same direction the force generators and
+ * the boat's own velocity use.
+ *
+ * A rotation by +θ about +Y (right-handed, Y up) turns a horizontal vector
+ * COUNTER-clockwise seen from above, but a bearing increases CLOCKWISE. Therefore
+ * the heading quaternion is a rotation about +Y by **−h**, NOT +h. This is the
+ * one correction that makes the quaternion frame identical to the physical frame:
+ * with it, `rotateVec3(quatFromHeading(h), (0,0,−1)) === (sin h, 0, −cos h)` to
+ * machine precision, so every `rotateVec3(orientation, …)` body-axis derivation
+ * (Buoyancy, WaveDrag point placement, the CoM, RightingMoment/Damping body-axis
+ * couples) agrees with the `(sin h, …)` force generators by construction.
+ *
+ * The historical bug (now fixed): `fromAxisAngle({0,1,0}, +h)` produced the
+ * X-MIRROR `(−sin h, 0, −cos h)`, so the quaternion frame and the physical frame
+ * were opposite-handed. That mismatch was the root cause of the heading-dependent
+ * capsize/half-speed (`tests/unit/physics/rotationInvariance.test.ts`).
+ */
+export function quatFromHeading(h: number, out: Quat = quat()): Quat {
+  // Rotation about +Y by −h.
+  const half = -h * 0.5;
+  out.x = 0;
+  out.y = Math.sin(half);
+  out.z = 0;
+  out.w = Math.cos(half);
+  return out;
+}
+
+/**
+ * Build a rotation from intrinsic yaw-pitch-roll, applied in that order:
+ * `q = qYaw · qPitch · qRoll`.
+ *
+ * Yaw is the compass HEADING — a rotation about +Y by **−yaw** (see
+ * `quatFromHeading`; `fromYawPitchRoll(h,0,0) === quatFromHeading(h)`). Pitch is
+ * about the body starboard axis +X (bow-up positive). Roll is about the body
+ * forward axis −Z (starboard-down positive = heel positive to starboard), to
+ * match the derived-state extractors `headingFromQuat`/`pitchFromQuat`/
+ * `heelFromQuat` below, which invert this build exactly (verified round-trip to
+ * machine precision across heading/pitch/heel).
  */
 export function fromYawPitchRoll(
   yaw: number,
@@ -95,17 +139,32 @@ export function fromYawPitchRoll(
   roll: number,
   out: Quat = quat(),
 ): Quat {
-  const cy = Math.cos(yaw * 0.5);
-  const sy = Math.sin(yaw * 0.5);
-  const cp = Math.cos(pitch * 0.5);
-  const sp = Math.sin(pitch * 0.5);
-  const cr = Math.cos(roll * 0.5);
-  const sr = Math.sin(roll * 0.5);
+  // Yaw about +Y by −yaw.
+  const hy = -yaw * 0.5;
+  const qyX = 0;
+  const qyY = Math.sin(hy);
+  const qyZ = 0;
+  const qyW = Math.cos(hy);
+  // Pitch about +X.
+  const hp = pitch * 0.5;
+  const qpX = Math.sin(hp);
+  const qpW = Math.cos(hp);
+  // Roll about −Z.
+  const hr = roll * 0.5;
+  const qrZ = -Math.sin(hr);
+  const qrW = Math.cos(hr);
 
-  out.x = sp * cy * cr + cp * sy * sr;
-  out.y = cp * sy * cr - sp * cy * sr;
-  out.z = cp * cy * sr - sp * sy * cr;
-  out.w = cp * cy * cr + sp * sy * sr;
+  // a = qYaw · qPitch
+  const ax = qyW * qpX + qyX * qpW; // = qyW·qpX
+  const ay = qyY * qpW + qyZ * qpX; // = qyY·qpW
+  const az = qyZ * qpW - qyY * qpX; // = −qyY·qpX
+  const aw = qyW * qpW - qyX * qpX; // = qyW·qpW
+
+  // out = a · qRoll  (qRoll = (0,0,qrZ,qrW))
+  out.x = aw * 0 + ax * qrW + ay * qrZ - az * 0;
+  out.y = aw * 0 - ax * qrZ + ay * qrW + az * 0;
+  out.z = aw * qrZ + ax * 0 - ay * 0 + az * qrW;
+  out.w = aw * qrW - ax * 0 - ay * 0 - az * qrZ;
   return normalizeQ(out, out);
 }
 
@@ -231,26 +290,71 @@ export function slerpQ(a: Quat, b: Quat, t: number, out: Quat = quat()): Quat {
   return out;
 }
 
-/** Extract the heading (rotation about +Y) as a bearing in `[0, 2π)`. */
+/**
+ * Extract the compass heading (bearing of the bow) as a value in `[0, 2π)`.
+ *
+ * Uses the ACTUAL rotated forward axis so it is the exact inverse of
+ * `quatFromHeading`: `f = rotateVec3(q, (0,0,−1))`, bearing = `atan2(f.x, −f.z)`.
+ * (The previous formula read an internal `(sin h, +cos h)` that disagreed in
+ * sign with what `rotateVec3((0,0,−1))` actually produces — the X-mirror bug.)
+ */
 export function headingFromQuat(q: Quat): number {
-  // Rotate the local forward axis (0,0,-1) and read its bearing.
-  const fx = 2 * (q.x * q.z + q.w * q.y);
-  const fz = 1 - 2 * (q.x * q.x + q.y * q.y);
-  const bearing = Math.atan2(fx, fz);
+  // Forward = q · (0,0,−1).  f.x = −2(q.x·q.z + q.w·q.y),  f.z = −(1 − 2(q.x²+q.y²)).
+  const fx = -2 * (q.x * q.z + q.w * q.y);
+  const fz = -(1 - 2 * (q.x * q.x + q.y * q.y));
+  const bearing = Math.atan2(fx, -fz);
   return bearing < 0 ? bearing + Math.PI * 2 : bearing;
 }
 
-/** Extract heel (roll) in radians, positive to starboard. */
+/**
+ * Extract heel (roll about the body FORWARD axis), positive to starboard
+ * (starboard side DOWN).
+ *
+ * Geometric (frame-order-independent): with the rotated starboard axis
+ * `s = q·(1,0,0)` and up axis `u = q·(0,1,0)`, `heel = atan2(−s.y, u.y)`. When
+ * the boat heels to starboard the starboard gunwale dips (s.y < 0) so heel > 0.
+ * Exact inverse of the roll term in `fromYawPitchRoll`.
+ */
 export function heelFromQuat(q: Quat): number {
-  // Local up axis (0,1,0) rotated into world space.
-  const ux = 2 * (q.x * q.y - q.w * q.z);
+  // s = q·(1,0,0):  s.y = 2(q.x·q.y + q.w·q.z).
+  const sy = 2 * (q.x * q.y + q.w * q.z);
+  // u = q·(0,1,0):  u.y = 1 − 2(q.x² + q.z²).
   const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
-  return Math.atan2(ux, uy);
+  return Math.atan2(-sy, uy);
 }
 
-/** Extract pitch in radians, positive bow-up. */
+/**
+ * Extract pitch (about the body starboard axis), positive bow-up.
+ *
+ * `f = q·(0,0,−1)`; the world-Y component of the forward axis is `sin(pitch)`.
+ */
 export function pitchFromQuat(q: Quat): number {
-  // Local forward axis (0,0,-1); its world Y component gives pitch.
-  const fy = -2 * (q.y * q.z - q.w * q.x);
+  // f.y = −2(q.y·q.z − q.w·q.x) = 2(q.w·q.x − q.y·q.z).
+  const fy = 2 * (q.w * q.x - q.y * q.z);
   return Math.asin(Math.max(-1, Math.min(1, fy)));
+}
+
+
+// ─── Canonical body-axis extraction ──────────────────────────────────────────
+//
+// Body axes: forward = −Z_body, starboard = +X_body, up = +Y_body. These three
+// helpers are the ONE sanctioned way for a force generator (or the camera) to
+// derive the boat's body axes in world space from its orientation. Deriving them
+// via `rotateVec3` of the body basis — rather than re-building `(sin h, …)` from
+// the heading — guarantees every consumer uses the SAME frame as the quaternion
+// (heel/pitch included), which is what makes the dynamics rotation-invariant.
+
+/** Boat forward (bow) direction in world space: `q · (0,0,−1)`. */
+export function forwardFromQuat(q: Quat, out: Vec3 = vec3()): Vec3 {
+  return rotateVec3(q, { x: 0, y: 0, z: -1 }, out);
+}
+
+/** Boat starboard direction in world space: `q · (1,0,0)`. */
+export function starboardFromQuat(q: Quat, out: Vec3 = vec3()): Vec3 {
+  return rotateVec3(q, { x: 1, y: 0, z: 0 }, out);
+}
+
+/** Boat up (masthead) direction in world space: `q · (0,1,0)`. */
+export function upFromQuat(q: Quat, out: Vec3 = vec3()): Vec3 {
+  return rotateVec3(q, { x: 0, y: 1, z: 0 }, out);
 }

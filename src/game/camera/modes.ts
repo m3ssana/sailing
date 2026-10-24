@@ -74,11 +74,11 @@ export function placeHelm(
  * the ground plane and renormalised, so heel/pitch do not swing the arm). The
  * controller smooths the eye so it trails. Distance/height scale with LOA.
  *
- * Using the orientation's projected forward — rather than `bearingToDirection`
- * of the derived heading — keeps chase consistent with helm/mast, which read
- * the orientation directly. (The project's `fromYawPitchRoll` yaw sign and
- * `bearingToDirection` do not agree on the x sign; the orientation quaternion is
- * the single source of truth.)
+ * Using the orientation's projected forward keeps chase consistent with
+ * helm/mast, which read the orientation directly. Since the heading-convention
+ * unification, the orientation quaternion's forward `rotateVec3(q,(0,0,−1))`
+ * equals `bearingToDirection(heading)` exactly, so the two are interchangeable;
+ * reading the quaternion keeps a single source of truth.
  */
 export function placeChase(
   boatPosition: Vec3,
@@ -100,12 +100,13 @@ export function placeChase(
     hx /= hl;
     hz /= hl;
   }
-  const dist = Math.max(6, loa * 2.2);
-  const height = Math.max(2.5, mastHeight * 0.6);
+  const dist = Math.max(8, loa * 2.8);
+  const height = Math.max(3, mastHeight * 0.75);
   // Eye behind the boat (opposite the bow) and up.
   set3(out.eye, boatPosition.x - hx * dist, boatPosition.y + height, boatPosition.z - hz * dist);
-  // Aim slightly above the hull so the boat sits in the lower third.
-  set3(out.target, boatPosition.x, boatPosition.y + loa * 0.1, boatPosition.z);
+  // Aim at the rig mid-height so the boat sits in the lower third and the
+  // horizon + sky fill the upper frame (readable silhouette against the sky).
+  set3(out.target, boatPosition.x, boatPosition.y + mastHeight * 0.4, boatPosition.z);
   return out;
 }
 

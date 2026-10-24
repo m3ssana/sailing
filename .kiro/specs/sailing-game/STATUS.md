@@ -1,11 +1,54 @@
 # Project status — where to pick up
 
-**Last updated:** 2026-10-24 · **Last commit:** `2b95b01` (HEAD, pushed). **Stream F is complete but
-UNCOMMITTED** — it lives in the working tree (new dirs `src/render/{sky,weather,night,post,lighting,atmosphere}/`,
-plus edits to `SkyState.ts`, `three-env.d.ts`, `WaterMaterial.ts`, `materials/{noise,terrain}.ts`, one new
-test in `tests/unit/environment/`). **CI:** green (`npm run ci` exit 0).
+**Last updated:** 2026-10-24 · **Last commit:** `2b95b01` (HEAD, pushed; working tree has the
+uncommitted Phase-2 physics/render/app work). **CI:** green (`npm run ci` exit 0, 1620 tests, stable
+across repeated runs). **Latest work: the RealConditions stream** — the real-wave "1 kt / 50° leeway on
+a reach" defect is FIXED (leeway sway-damping, bounded wave-added resistance, design-draft flotation,
+raised foil stall, completing tacks); the dinghy now sails ≥73–85% of polar on reaches in the REAL
+Newport Hs 0.7 m sea, the hull floats at its design waterline (render heave-override hack removed), and
+tacks COMPLETE at 8/11 kt. See the "RealConditions stream" section below. The remaining limit is the
+SCRIPTED autosail helm pinching in the live venue (Stream G crew), not the physics.
 
 This file is the resume point. `tasks.md` is the plan; this is the progress against it.
+
+> **WaterBoatLook render-polish pass (2026-10-24, UNCOMMITTED, supersedes the RenderLook summary
+> below):** second-browser-run visual defects fixed — (1) **water radial-streak aliasing**: added
+> PER-RING BAND-LIMITING to the Gerstner nodes (`src/render/ocean/SpectrumFallback.ts`
+> `bandLimitWeight` + `spacing` arg on `buildGerstnerPositionNode`/`buildGerstnerNormalNode`), a
+> far-field normal flatten toward (0,1,0) and a distance roughness widening (`buildDistanceRoughnessNode`,
+> Toksvig-style); `WaterMaterial` gained `vertexSpacing` + `cameraPositionUniform`, and `Session` now
+> builds ONE water material PER clipmap ring, each band-limited to that ring's cell size (0.5 m inner →
+> 64 m outer) with a shared camera uniform, so coarse far rings no longer alias sub-grid chop into
+> needles. Near-ring coherence still < 5 cm (new tests in `waveCoherence.test.ts`). (2) **Hull
+> invisible**: root cause was TWO things — the near-white gelcoat hull vanished against the pale
+> overcast sea (fixed: `BoatView` now picks the boat's distinctive `appearance.deckColor` (navy) when
+> `hullColor` is near-white, via `pickVisibleHullColor`), AND the boat floated too low. **UPDATE
+> (RealConditions, 2026-10-24): the deep-sink is now FIXED in the physics** — `Buoyancy`'s `refDepth`
+> references the design-waterline submergence so the keel settles at ~0.12 m (design draft), and the
+> render-side `BoatView.setHeaveOverride` presentation hack (+ the Session line that drove it) has been
+> REMOVED; the render view uses the physics heave directly and the hull sits at its waterline with full
+> freeboard by construction. (3) **Flat grey sail**:
+> replaced the single-sided generic `buildSailcloth` (the chase cam saw its unlit back face) with a new
+> two-sided CREAM sailcloth (`src/render/boat/sailSurfaceMaterial.ts`): `DoubleSide`, panel seam lines
+> from the generator's vertex-colour panel fraction, and a backlit scatter glow; camber/twist come from
+> the baked sail geometry. Verified in headless Chrome/SwiftShader (WebGL2) from chase/helm/drone cams:
+> resolved swell with a soft hazy horizon and NO streaking, a navy hull sitting in the water at the
+> waterline, and a cream two-sided sail — 0 console/shader errors (only a benign favicon 404).
+> `npx vitest run src/render tests/unit/render tests/unit/app` → **709/709**; eslint clean on
+> `src/render src/app` + the touched tests; tsc clean on the render/app surface (the only repo tsc
+> error is the concurrent physics agent's mid-write `tests/unit/physics/rotationInvariance.test.ts`).
+> KNOWN, NOT MINE: during the autosail run the dinghy over-heels / capsizes in the breeze (HEEL 58–84°)
+> — the physics roll-fragility / tack-capsize limit owned by `src/physics`/`src/game/assist`, not a
+> render defect (the hull + sail render correctly through the heel). **UPDATE (HeadingUnify, 2026-10-24):
+> this capsize was the engine-wide heading-convention bug and is now FIXED — the autosail run heels only
+> ~6–7° and never capsizes; see the HeadingUnify section below.**
+>
+> **RenderLook render-polish pass (2026-10-24, earlier, superseded above):** first-browser visual
+> defects fixed — the black boat (`src/render/lighting/SceneLighting.ts` hemisphere+ambient fill + a
+> ShadowRig `SUN_KEY_GAIN`), the flat ocean (wired a real spectrum `WaveField` from the snapshot into
+> the env via `createVenueEnvironment({waveField})`; clipmap water displaces + re-normals per-vertex
+> from the SAME components), the glary/over-concentrated water (turbidity-capped Fresnel + scaled
+> glitter), and the tilted horizon / cramped chase cam (`horizonLock` 0.35, framing, `?cam=` param).
 
 ---
 
@@ -17,10 +60,10 @@ This file is the resume point. `tasks.md` is the plan; this is the progress agai
 |---|---|
 | `tsc --noEmit` | 0 errors |
 | `eslint . --max-warnings 0` | 0 warnings |
-| `vitest run` | 1160 tests / 61 files was the Stream F baseline. **G.1 adds +91 tests / +7 files** (`tests/unit/game/input`, `tests/unit/input`), all passing in isolation (`npx vitest run tests/unit/input tests/unit/game`). Full-suite total not re-run here (a concurrent boats agent is also changing counts). |
+| `vitest run` | **1620 tests / 101 files, all passing** (full `npm run ci`, RealConditions stream 2026-10-24; stable across repeated runs). Adds the real-wave sailing GUARD (`tests/unit/app/realConditionsSailing.test.ts`, +3: ≥60% polar on reaches + ≥55% close-hauled, <12° leeway, in the REAL Newport Hs 0.7 m sea). Keeps the rotation-invariance harness (6), mirror symmetry (9), 200 s soaks + capsize contrast (12), assist tack/gybe robustness (tacks now assert COMPLETE at 8/11 kt), re-recorded golden (+ binding negative control), headless autosail end-to-end (2). |
 | `vite build` | succeeds |
 | `check-no-assets` | pass — no mesh, texture or audio files in the build |
-| `check-budget` | **205.9 kB gzipped, 4.0% of the 5 MB budget** (unchanged: nothing in Stream F is imported by the app entry yet, so it is tree-shaken out) |
+| `check-budget` | **354.0 kB gzipped, 6.9% of the 5 MB budget** (the whole game is imported by the app entry). |
 
 Run `npm run ci` first thing to confirm nothing has drifted.
 
@@ -54,18 +97,467 @@ downwind 160°; capsize in 25 kt sheet-cleated no-hike at **2.6 s**.
    came out negative on a reach (boat sailed backwards). Fixed; verified forward drive + leeward heel on both tacks.
 
 **Honest scope reductions (documented in code + here):**
-- UPDATED by the PhysicsStability stream — the predecessor's reductions below are
-  **superseded**. The NaN divergence, the "fragile above ~10 kt" roll, the
-  module-scope WaveDrag slam state, the leeway crab, and the 20 s-window soak are
-  all RESOLVED (see the PhysicsStability section further down). What remains
-  scoped-down and documented: (a) the fully-autonomous closed-loop autopilot
-  holds a steady beam reach without capsize up to ~12 kt, not 15 kt+, and does
-  not execute clean tacks/gybes — that needs the anticipating AI crew (Stream G);
-  (b) the polar's upwind VMG optimum is still ~35° (the leeway/foil-stall term
-  was attempted and reverted as it didn't robustly widen it — Task E left
-  documented).
+- UPDATED by the Symmetry stream (2026-10-24) — supersedes the AssistAndSpeed
+  reductions about tacking. The predecessor's "a clean tack works in only ONE
+  rotational sense because the frozen model is not perfectly port/starboard
+  symmetric" was a REAL PHYSICS BUG and is now **FIXED**: `FoilLift` computed
+  leeway as `heading − velHeading` WITHOUT wrapping, so on any heading in (π, 2π)
+  (the whole westerly half — e.g. the Newport spawn at ~232°) the foils saw a
+  leeway off by ≈2π and a nonsense angle of attack. This both broke
+  port/starboard mirror symmetry AND was the direct cause of the real-game
+  capsize + half-speed on the reported ?autosail run. Fixed to
+  `wrapAngleSigned(heading − velHeading)`. A second asymmetry — `AeroForce`'s
+  traveller term added to the UNSIGNED boom magnitude — is also fixed (tack-aware
+  now). A generic MIRROR-SYMMETRY harness (`tests/unit/physics/mirrorSymmetry.
+  test.ts`) proves every force generator and a full 20 s trajectory are now
+  port/starboard mirror-images. With the leeway fix + a reworked assist tack
+  (foot off to build speed → carry the main sheeted-in through the eye so it
+  backs the bow across → heel-capped depower), the assisted tack now completes
+  from BOTH senses at 8/11/14 kt with < 45° heel (see the Symmetry section).
+  STILL scoped-down and documented: (1) ROTATION-INVARIANCE bug — investigated
+  in depth by the PhysicsHeading stream (2026-10-24); see its section below for
+  the full diagnosis, the attempted-and-reverted fix, and the characterisation
+  harness. (2) A steady controller still can't hit the polar (close reach ~55 %
+  of 6.5 kt at 11 kt) or hold a flat 14 kt downwind gybe — the roll-fragility /
+  pointing limit that needs the anticipating AI crew (Stream G).
 
-### PhysicsStability stream (2026-10-24, UNCOMMITTED) — divergence + crab fixed, real acceptance tests restored
+### HeadingUnify stream (2026-10-24, UNCOMMITTED) — rotation-invariance FIXED (engine-wide heading-convention unification)
+
+**This supersedes the PhysicsHeading stream's "diagnosed but reverted" writeup
+below.** The two-opposite-handed-frames root cause PhysicsHeading diagnosed is
+now FIXED engine-wide, and the rotation-invariance harness asserts invariance
+and PASSES.
+
+**Root cause (re-verified with numbers):** `fromAxisAngle({0,1,0}, +h)` rotating
+`(0,0,-1)` yields `(-sin h, 0, -cos h)` — the X-MIRROR of the physical
+`(sin h, 0, -cos h)` the force generators + velocity use (agree only at h=0/π).
+`headingFromQuat`'s internal `fx` formula also disagreed in sign with the actual
+`rotateVec3((0,0,-1))`. Measured: at h∈{37,90,200,305}° the quat forward x was
+exactly `-sin h` vs the physical `+sin h`.
+
+**The unification (all in non-frozen code; `src/types` untouched):**
+- `src/core/math/quat.ts`: NEW `quatFromHeading(h)` = rotation about +Y by **−h**
+  (so `rotateVec3(q,(0,0,−1)) === (sin h,0,−cos h)` to machine precision — the two
+  frames are now ONE). Rewrote `headingFromQuat` to `atan2(f.x,−f.z)` on the real
+  rotated forward; rewrote `heelFromQuat` (`atan2(−s.y,u.y)`, +=starboard down)
+  and `pitchFromQuat` (`asin(f.y)`, +=bow-up) as geometric extractors; rewrote
+  `fromYawPitchRoll` = `qYaw(−yaw)·qPitch(+X)·qRoll(−Z)` so `fromYawPitchRoll(h,0,0)
+  === quatFromHeading(h)`. Added `forwardFromQuat/starboardFromQuat/upFromQuat`.
+  All round-trip to machine precision (verified for heading/heel/pitch combos).
+- `BoatSimulation.reset` uses `quatFromHeading`.
+- `RightingMoment` + `HydrodynamicDamping`: now build their roll/pitch/yaw couples
+  in the BODY frame and inject via a new `src/physics/forces/torqueCouple.ts`
+  `pushBodyAxisTorque` (pure couple = exactly the requested body torque rotated to
+  world, zero net force — verified ‖τ_err‖≈1e-12, ‖F_net‖=0 over 5000 random cases).
+  HydrodynamicDamping damps `ω_body = q⁻¹·ω_world` per body axis.
+- `BoatFactory.estimateInertia`: fixed the roll↔pitch transposition — now returns
+  `{x: pitch, y: yaw, z: roll}` to match the integrator's `.x`-about-local-X /
+  `.z`-about-local-Z. Documented the mapping in both files.
+- `src/game/assist`, the `ScriptedInputProvider` PD helm, the sailing/tack test
+  harnesses, and the closed-loop sailing tests: the rudder→heading and ω_y→heading
+  signs FLIPPED with the frame unification, so every PD helm became
+  `rudder = −he + ω_y` (was `+he − ω_y`) and the assist's bear-off / turn-through-
+  the-eye signs were corrected (first-principles justified in-code). The anti-stall
+  now LATCHES its bear-off direction (no helm chatter at the eye).
+- Camera `modes.ts`: the "fromYawPitchRoll yaw sign and bearingToDirection disagree"
+  workaround note is now stale and rewritten — the code already derived body axes
+  via `rotateVec3`, which is now correct by construction. All 63 camera tests pass
+  unchanged.
+
+**Rotation-invariance harness (`tests/unit/physics/rotationInvariance.test.ts`,
+6 tests) now ASSERTS invariance and PASSES:** for θ∈{0,37,90,142,200,305}° the
+body-frame scalars (speed/heel/pitch/leeway/yaw-rate) of the same rotated scenario
+agree within 0.03 m/s and 0.5°, for Buoyancy / FoilLift / RightingMoment /
+HydrodynamicDamping each in isolation AND a driven reach, AND for the full sim over
+20 s (worst heel-divergence < 0.5° vs the old > 30°).
+
+**SPEED (the real goal) — MET, and heading-independent.** Heading-pinned PD helm,
+11 kt, assisted auto-trim, 40 s per heading, measured % of `solvePolar`:
+
+| TWA | polar (kt) | all 8 wind-FROM bearings {0,45,90,135,180,225,270,315}° |
+|---|---|---|
+| 50 (close-hauled) | 5.40 | **4.68 kt = 87%** (identical to 2 d.p. at EVERY bearing) |
+| 70 | 6.47 | **5.43 kt = 84%** (identical at every bearing) |
+| 90 (beam reach) | 6.61 | **5.57 kt = 84%** (identical at every bearing) |
+
+0.00 % variation across all four quadrants (≪ the 10 % tolerance). Thresholds met:
+close-hauled 87 % ≥ 55 %, TWA 70 → 84 % ≥ 65 %, beam reach 84 % ≥ 70 %. (Pre-fix:
+~20 % of polar and CAPSIZED on westerly/Newport headings.)
+
+**Real browser (headless Chrome/SwiftShader, WebGL2), `?backend=webgl&autosail=1&
+offline=1&speed=8`:** `backend=webgl2`, `weatherSource=climatology`, `capsized=false`,
+`maxHeelDeg≈6.9°` (pre-fix 58–84° / inverted), `tackCount=1`, boatSpeed ~1.5 kt,
+0 errors (only a favicon 404). Screenshots (chase + drone + helm) LOOKED AT: at
+Newport wind FROM ~271°, HDG ~209°, the boat heels 6° to **port = leeward** (wind on
+the starboard bow), the sail sets out to **port = leeward** — all correct — and the
+drone-cam visible heading agrees with the HUD compass. The autosail **gybe** does
+not fire in the compressed-clock live run (a timing/venue-wind artifact), but the
+headless end-to-end test (`tests/unit/app/autosailEndToEnd.test.ts`, uniform wind
+FROM 277° AND north) proves the full scripted sequence executes **≥1 tack, ≥1 gybe,
+no capsize, heel < 60°** with the same assist+script+sim.
+
+**Verification:** `npm run ci` exit 0 — tsc 0 errors, eslint 0 warnings, **1617
+tests / 100 files pass**, build + no-assets + budget (353 kB, 6.9 %) green. Mirror
+symmetry (9), all 12 stability tests incl. the 200 s 30/35/40 kt soaks, the 25 kt
+capsize-contrast + 12 kt no-capsize, assist tack/gybe robustness (38), golden
+(re-recorded with documented justification; negative control still binds) — all green.
+
+### RealConditions stream (2026-10-24, UNCOMMITTED) — real-wave sailing fixed; draft fixed; tacks complete
+
+**This SUPERSEDES the two "DOCUMENTED, NOT fully met" reductions that used to sit
+here (the dinghy deep-sink revert, and the tack-completion-only-SAFE reduction).
+Both are now FIXED.** The headless acceptance tests passed (84–87% of polar) only
+because they sailed in CALM/synthetic water; the REAL game builds a venue
+environment with a spectrum wave field (Hs≈0.70 m JONSWAP+swell) + tide/current,
+and in it the dinghy collapsed to ~1 kt / 50° leeway on a reach (the reported
+browser defect). Reproduced HEADLESSLY via a new pure `buildSessionWorld` (the
+factory the Session AND the tests now share), bisected, and fixed at the root.
+
+**Reproduction + bisect (Newport offline, Oct climatology: 11 kt FROM 270°, Hs 0.70 m):**
+the exact Session loop (input→assist→setControls→step @1/120) with the autosail
+script collapsed from 3.9 kt to ~1.0 kt by t=5 s, leeway −50…−74°, heel 6–7°,
+~18–24% of polar — matching the report. Bisect: FLAT water and no-WaveDrag also
+collapsed (leeway runaway was the common factor), so waves were the TRIGGER, not
+the sole cause. Root causes found (with evidence) and fixed:
+
+1. **Leeway RUNAWAY (dominant) — sway damping.** `HydrodynamicDamping`'s linear
+   term lumped surge+sway into one tiny `surgeLinear`=12, so the athwartships
+   (leeway) mode was almost UNDAMPED. With the stiff foil, a wave-induced leeway
+   spike produced a large unbalanced side force that accelerated the hull
+   sideways and overshot into foil stall, from which the leeway/speed loop never
+   recovered. Fix: split the linear damping in the BODY frame — light SURGE (12),
+   heavy SWAY (600, ~critical for the sway mode), rotation-invariant. Leeway on a
+   real-wave reach dropped from −50…−74° to ≈ −1…−3°.
+2. **Added resistance in waves — 2–8× too strong.** `HydroResistance.addedResistanceInWaves`
+   returned an ABSOLUTE force that at the dinghy's low close-hauled speed was
+   +200–300 % of calm resistance (measured +209 % close-hauled). Rewrote it as a
+   BOUNDED fraction of the calm friction+residuary (Hs²-scaled, heading-weighted,
+   capped ≤ 35 %), matching the cited ~10–25 % for a dinghy at Hs 0.7 m.
+3. **Deep sink — FIXED (was the reverted item).** `Buoyancy` `refDepth` now uses
+   the volume-weighted mean submergence of the buoyancy points AT the design
+   waterline (`≈ waterlineHeight − CoB.y`, computed per-boat in `BoatFactory`),
+   so Σ buoyancy = weight at the DESIGN draft by construction: the keel now
+   settles at ~0.12 m (design), not ~0.3 m. The previous "it over-stiffened
+   stability" finding was traced to the deep-sink-era roll damping (5000 ≈ 4×
+   critical), NOT the draft itself — so the JOINT recalibration here lands it:
+   roll damping → 2000 (≈1.7× critical), and the foil stall raised ~11°→~15° with
+   a gentler post-stall decay (real NACA 00xx). ALL invariants hold: 25 kt
+   cleated-no-hike capsizes ~2.4 s; 12 kt full-hike eased does not; 200 s 30/35/40
+   kt soaks bounded; mirror symmetry (9); rotation-invariance (6); golden
+   RE-RECORDED (justified; negative control still binds). The render
+   `BoatView.setHeaveOverride` hack and its Session call site are REMOVED — the
+   physics floats the hull right.
+
+**Tacks now COMPLETE (restored from "SAFE only").** The tack technique was
+rewritten: the speed thresholds were in m/s but had been set to knot-sized values
+(so the boat always ran the long build-to-TWA-90 and never committed); now it
+foots only slightly (to a close reach, not a beam reach), carries the main HARD
+through the eye to back the bow across, then bears away to a reach to rebuild.
+Measured (uniform wind, both senses): tacks CROSS the eye onto the opposite tack
+within 12 s, max heel 8–14°, no capsize, at 8 & 11 kt (restored COMPLETES
+assertions in `tackRobustness`/`closedLoop`); 14 kt is marginal (asserted SAFE —
+documented top-of-range limit). GYBES complete cleanly at 8/11/14 kt (1–5 s, heel
+1–4°). Headless end-to-end autosail (`autosailEndToEnd`) still ≥1 tack + ≥1 gybe,
+no capsize.
+
+**REAL-wave reach speed — MET (the headline fix):** heading-pinned auto-trim in the
+REAL Newport Hs 0.7 m sea at the venue spawn:
+
+| TWA | FLAT (calm) | REAL waves (Hs 0.7) |
+|---|---|---|
+| 50 close-hauled | 70 % | **73 %** |
+| 70 close reach | 86 % | **77 %** |
+| 90 beam reach | 86 % | **85 %** |
+
+(Pre-fix in the real sea: close-hauled 16 %, close reach 58 %, beam 78 % with
+−25…−50° leeway.) New GUARD test `tests/unit/app/realConditionsSailing.test.ts`
+(deterministic, pinned Oct snapshot) asserts ≥60 % of polar on the reaches and
+≥55 % close-hauled, all at < 12° leeway, IN the real wave field — the regression
+the calm-water acceptance tests could not see.
+
+**Real browser (headless Chrome/SwiftShader, WebGL2), `?autosail=1&offline=1&speed=1`:**
+`backend=webgl2`, `weatherSource=climatology`, `capsized=false`, `maxHeelDeg≈14.5`,
+`tackCount=1`, `gybeCount=1`, 0 errors (benign favicon 404 only). Screenshots LOOKED
+AT (chase): the navy hull sits IN the water with full freeboard (NOT awash — deep-sink
+gone), the cream sail sets to the correct leeward side, and the boat moves through
+resolved swell with a hazy horizon. **NOTE on the live scripted run:** `?speed>1`
+scales the ENV/script time but not the 120 Hz physics step, so a large speed races
+the SCRIPT ahead of the physics and the scripted maneuvers do not complete — the
+browser acceptance therefore runs at `speed=1` (and `main.ts` now signals `done`
+once a tack AND gybe are observed, not on a fixed wall timer). The live scripted HUD
+still shows the boat PINCHING/under-performing on its close-hauled legs (~30 % polar)
+because the scripted PD helm points too high and the post-tack low-speed recovery is
+weak — a scripted-autosail-quality limit (the same steady-controller / Stream-G
+limit), NOT a physics defect: the physics itself achieves ≥60 % on reaches with a
+proper helm (proven by the guard test, and by a headless replication of the live
+loop in the real world which reached 4 kt / ~75 % before the first maneuver).
+
+**Files changed (RealConditions):** `src/physics/forces/Buoyancy.ts` (per-boat
+design-draft refDepth), `src/physics/forces/HydrodynamicDamping.ts` (roll 5000→2000,
+surge/sway split + `swayLinear`), `src/physics/forces/HydroResistance.ts` (bounded
+fractional added-resistance), `src/physics/coefficients/aeroCoefficients.ts` (foil
+stall ~11°→~15°, gentler decay), `src/boats/BoatFactory.ts` (`designDraftRefDepth`,
+`damping` option), `src/game/assist/index.ts` (tack technique + m/s thresholds +
+reach-exit + completion), `src/app/sessionHelpers.ts` (scripted helm leaves the
+mainsheet to the assist), `src/app/buildSessionWorld.ts` (NEW shared world factory),
+`src/app/Session.ts` (uses buildSessionWorld; heave-override removed),
+`src/render/boat/BoatView.ts` (heave-override removed), `src/main.ts` (autosail done
+on tack+gybe observed). Tests: `tests/unit/app/realConditionsSailing.test.ts` (NEW
+guard), re-recorded `fixtures.golden.ts`, restored COMPLETES in
+`tackRobustness`/`closedLoop`, updated the foil-stall-angle test (cited). `npm run
+ci` exit 0 — tsc 0, eslint 0, **1620 tests / 101 files**, build + no-assets + budget
+(354 kB, 6.9 %) green; full suite stable across repeated runs.
+
+**STILL a documented limit:** the SCRIPTED autosail helm pinches on close-hauled
+legs in the live venue, so the live browser run under-performs the polar there and
+can look slow; the completing, speed-holding sail needs the anticipating AI crew
+(Stream G). The PHYSICS (the actual reported bug) is fixed and guarded.
+
+### PhysicsHeading stream (2026-10-24, UNCOMMITTED) — rotation-invariance DIAGNOSED; fix attempted & REVERTED; autosail hook extended
+
+Owns `src/physics`, `src/boats`, `src/game/assist`, `tests/unit/{physics,boats,
+game/assist}`, `src/app/sessionHelpers.ts`, and ONLY the autosail/Scripted call
+site in `src/app/Session.ts`. `src/types` untouched. Verification (all green):
+`npx vitest run tests/unit src/physics src/boats` → **920 passed / 62 files**;
+`npx eslint src/physics src/boats src/game/assist src/app tests/unit
+--max-warnings 0` → clean; `npx tsc --noEmit` → 0 errors. Did NOT run `npm run ci`.
+
+**ROTATION-INVARIANCE (item 1) — root cause fully diagnosed, fix reverted.**
+A new harness `tests/unit/physics/rotationInvariance.test.ts` runs the SAME
+body-frame scenario (close reach, uniform wind) at θ ∈ {0,37,90,142,200,305}°
+about +Y and compares the frame-free derived scalars (speed/heel/pitch/leeway/
+yaw-rate). It CHARACTERISES (and now pins) the bug. Findings:
+  - `RightingMoment` and `HydrodynamicDamping` inject their roll/pitch/yaw
+    couples about FIXED WORLD axes (a vertical force couple offset in world ±X/
+    ±Z → torque about world Z/Y), driven by `state.heel` and the WORLD components
+    of `angularVelocity`. Correct only at heading 0/π; grossly heading-dependent
+    elsewhere. Isolated body-frame divergence 0.16–0.18 within ~0.5 s vs the
+    ~0.08 hull-loft floor for Buoyancy/FoilLift. **This is the direct cause of
+    the real-game Newport (spawn ~204–232°, wind ~277°) heading-dependent
+    capsize.**
+  - `BoatSpec.inertia` (BoatFactory `estimateInertia`) TRANSPOSES roll↔pitch:
+    it returns `{x: roll, y: yaw, z: pitch}` but the integrator applies `.x`
+    about local X = TRANSVERSE (pitch axis) and `.z` about local Z = LONGITUDINAL
+    (roll axis). So the hull resists pitching with the small roll inertia and
+    rolling with the large pitch inertia (backwards), and the anisotropy couples
+    heading-dependently through `computeWorldInertiaInverse`.
+  - DEEPER root cause: the codebase has TWO opposite-handed frames. The force
+    generators + the boat's velocity use the PHYSICAL `forward = (sin h, 0,
+    −cos h)` (verified: a sailing boat's velocity bearing matches it), while the
+    orientation quaternion's `rotateVec3((0,0,−1))` — used for the CoM and
+    buoyancy/wave-drag point placement — is the X-MIRROR of it (bearing −h).
+    With a fore-aft CoM offset this frame mismatch alone leaves a heading-
+    dependent yaw/roll torque even after the couple + inertia fixes.
+
+**Attempted fix → REVERTED (the "plausible fix breaks a different invariant"
+doctrine).** A joint rework was implemented: (a) body-axis couples for
+RightingMoment/HydrodynamicDamping via a `pushBodyAxisTorque` pure-couple helper;
+(b) the inertia roll↔pitch relabel; (c) a unified PHYSICAL frame for the CoM and
+buoyancy/wave-drag/foil points (`physicalPointWorld` = X-mirror conjugation of
+the quaternion rotation). The couple + inertia fixes alone passed the mirror /
+soak / sailing tests and reduced RightingMoment's isolated heading divergence
+~40 %, BUT did NOT eliminate the dependence (the frame mismatch dominated), and
+adding the unified-frame fix **broke port/starboard mirror-symmetry, the 12 kt
+capsize-contrast, and the closed-loop sailing/tack tests** (7 failures). The
+closed-loop sim STILL capsized at most headings even with the body-axis couples.
+Per doctrine the whole rework was reverted; `RightingMoment.ts` and
+`HydrodynamicDamping.ts` carry a KNOWN-LIMITATION note. A proper fix must resolve
+the engine-wide `fromAxisAngle`/`headingFromQuat` vs `(sin h,…)` X-mirror
+convention (touches render/camera/HUD/venues) — out of this stream's scope and
+high-risk. The harness remains as the reproducible characterisation + the target
+a future fix must drive to zero.
+
+**SPEED (item 2) — measured, NOT improved (blocked by item 1).** Heading-pinned
+PD-helm, 11 kt, eased/auto-trim sheet, 40 s per heading:
+
+| wind FROM | TWA | speed (kt) | maxHeel | capsized |
+|---|---|---|---|---|
+| 90° (bow ≈ N) | 90 | 3.00 | 8° | no |
+| 90° (bow ≈ N) | 70 | 1.71 | 8° | no |
+| 0 / 204 / 277° | 50–90 | 1–2.5 | 65–180° | **yes** |
+
+The boat only stays upright and sails (slowly) when it happens to point ≈north;
+at Newport's westerly headings it capsizes — the item-1 bug, not a trim/polar
+issue. The polar target (ILCA ~5–7 kt beam reach) is therefore not met at any
+non-northerly heading. No coefficient was tuned to chase a number. Honest
+reduction: speed cannot be met until the rotation-invariance bug is fixed.
+
+**AUTOSAIL (item 3) — DONE.** `src/app/sessionHelpers.ts`'s `ScriptedInputProvider`
+already had the PD-helm sequence (close-hauled → tack 26 s → broad reach → gybe
+56 s); the Session autosail call site now PASSES the helm (`heading`, `yawRate`,
+`windFromBearing` from the boat state) so `?autosail=1` runs it closed-loop
+instead of the legacy open-loop fallback. `window.__sailing` (`SailingTestHook`)
+gained `gybeCount`, `maxHeelDeg` and `capsized`; the loop counts gybes
+(idle→gybing) alongside tacks and tracks worst heel + the capsize flag, so a
+browser test can assert "did not capsize". Headless verification: the script +
+assist fire **tackCount 1, gybeCount 1** over the sequence (maxHeel 68°,
+capsized=true at wind-FROM-north over 70 s — consistent with the unfixed item-1
+bug; the hook correctly reports it). Two small additive edits outside `src/app`:
+`src/main.ts` test-hook initialiser gained the three new fields (keeps the build
+compiling). `src/app/Session.ts` edit limited to the autosail call site + the
+hook plumbing (re-read right before editing).
+
+**Tests:** `rotationInvariance.test.ts` (6 — 2 invariance-holds for Buoyancy/
+FoilLift + 2 bug-characterisations for Righting/Damping + 1 full-sim gross-
+divergence characterisation). Golden baseline UNCHANGED from the speed-gap
+re-record (the reverted rework would have moved it; it didn't land). Mirror /
+stability / sailing / dinghy / assist / app suites all still green.
+
+**UNRESOLVED:** the rotation-invariance bug itself (fix requires the engine-wide
+heading-convention unification), and therefore item-2 speed and the real-game
+Newport capsize. The characterisation harness is the hand-off.
+
+### Symmetry stream (2026-10-24, UNCOMMITTED) — mirror-symmetry bugs fixed + robust assisted tack
+
+Owns `src/physics`, `src/boats`, `src/game/assist`, `tests/unit/{physics,boats,
+game/assist}`, and the `ScriptedInputProvider` autosail script in
+`src/app/sessionHelpers.ts`. `src/types` untouched. Verification:
+`npx tsc --noEmit` 0 errors; `npx eslint src/physics src/boats src/game/assist
+src/app/sessionHelpers.ts tests/unit --max-warnings 0` clean;
+`npx vitest run tests/unit/{physics,boats,game/assist,app}` → **191 passed / 17
+files**. (The one repo-wide vitest failure, `tests/unit/game/camera/photo.test.
+ts`, is a concurrent CAMERA agent's `settings.ts` edit — outside this stream;
+it passes with that edit stashed.)
+
+**Two real physics bugs found via a generic mirror-symmetry harness + fixed:**
+1. `src/physics/forces/FoilLift.ts` (~line 66) — leeway `heading − velHeading`
+   was UNWRAPPED. `heading` ∈ [0, 2π) but `velHeading = atan2(…)` ∈ (−π, π], so
+   on westerly headings the leeway was ≈2π too large → garbage foil lift/drag.
+   The dominant port/starboard asymmetry AND the real-game Newport capsize/
+   half-speed cause (Newport sails on headings > π). Fixed with `wrapAngleSigned`.
+   Evidence: pre-fix a pose and its exact mirror diverged ~1 m / 0.3 rad over
+   20 s; post-fix ~1 cm. Regression: `mirrorSymmetry.test.ts`
+   (`FoilLift leeway … heading-wrap invariant`, fails on old code).
+2. `src/physics/forces/AeroForce.ts` (`getSailTrim`) — the traveller offset was
+   added to the UNSIGNED boom-angle magnitude, so a non-zero traveller widened
+   the boom on one tack and narrowed it on the mirror. Made tack-aware
+   (`−sideSign·traveller·k`). Regression: `AeroForce mirrors (incl. traveller)`.
+
+**Mirror-symmetry harness** (`tests/unit/physics/mirrorSymmetry.test.ts`, 9
+tests): a generic `assertGeneratorMirrors` runs each generator (Buoyancy, Aero,
+FoilLift, HydroResistance, RightingMoment, HydrodynamicDamping, WaveDrag) on a
+representative heeled/leeway/yaw-rate pose and its exact mirror (position x→−x,
+ω pseudovector, quat conjugation, rudder/traveller/crewLateral negated, wind FROM
+b→−b) and asserts the net force/torque are mirror images; plus a full-boat 20 s
+trajectory mirror check (uniform wind). All pass.
+
+**Robust assisted tack/gybe** (`tests/unit/game/assist/tackRobustness.test.ts`,
+18 tests, closed loop against the real sim + a PD "player" helm). Assist rework
+in `src/game/assist/`: `_depoweredSheet` now blends toward the LUFF sheet as heel
+builds (works close-hauled, not just reaching — the old one did nothing
+close-hauled); the tack machine foots off to build speed, then carries the main
+sheeted-IN through the eye (a backed cat-rig main pushes the bow across — the
+technique that actually crosses from both senses), with a tight heel-cap; new
+`luffSheetFor` helper. Outcome (wind FROM north, where ± senses are true
+mirrors):
+
+| manoeuvre | 8 kt | 11 kt | 14 kt |
+|---|---|---|---|
+| tack, both senses | ✓ heel 5° rec 0.85 | ✓ heel 11–12° rec 1.6 | ✓ heel 31° rec 0.64 |
+| gybe, both senses | ✓ heel 3° | ✓ heel 9° | ⚠ crosses but heel 113° (documented strong-wind limit) |
+
+All tacks complete in ≤ 12 s, < 45° heel, no capsize, speed recovers > 60 %, and
+hand control back. At the real Newport wind FROM 277° (not self-mirror) the
+assist keeps heel bounded well under a knock-down and always hands control back
+(the headline regression — the real game ended inverted at ~140°).
+
+**Autosail script** (`ScriptedInputProvider`): gained an optional PD-helm path
+(engaged when boat heading/yaw + wind bearing are passed) that steers close-
+hauled → tacks at 26 s → bears away to a broad reach → gybes at 56 s; the legacy
+`frame(t)` open-loop call is unchanged (existing smoke test still valid).
+
+**SPEED (item 3):** the FoilLift leeway fix raised achieved speed on westerly
+headings substantially, but a steady PD-helm controller still reaches only
+~54 % of the polar on a beam reach (3.6 vs 6.6 kt) and over-heels/stalls trying
+to hold a close reach — the pointing/roll-fragility limit documented above (it
+needs the anticipating crew, not a steady helm). Honest reduction, not met.
+
+
+
+### AssistAndSpeed stream (2026-10-24, UNCOMMITTED) — speed gap fixed + SailingAssist (Phase 2 task 2.1 / G.2–G.3)
+
+New dir `src/game/assist/` (the SEAM the session agent codes against) + three
+physics fixes in `src/physics` / `src/boats`. Verification:
+`npx vitest run tests/unit src/physics src/boats` → **873 passed / 57 files**;
+`npx eslint src/physics src/boats src/game/assist tests/unit --max-warnings 0`
+clean; `npx tsc --noEmit` 0 errors. Did NOT run `npm run ci`. `src/types` untouched.
+
+**THE SEAM — `src/game/assist/index.ts`:** `createSailingAssist(opts?)` →
+`SailingAssist { update(frame, out): Partial<ControlState>; readonly phase:
+'idle'|'tacking'|'gybing'; reset() }`, allocation-free (`update` writes only the
+overridden controls into the caller's `out` and returns it). `AssistFrame` carries
+`{state, trueWindFromBearing, trueWindSpeed, assist, commands, driverControls, dt}`.
+Pure helpers `idealSheetFor(awaDeg, windSpeed)` / `targetHikeFor(heel, awaDeg,
+windSpeed)` exported for tests/HUD. Levels: 'simulation' = pass-through (writes
+nothing, ignores tack/gybe); 'assisted' = auto-trim main to the attached-flow
+ideal (player override wins until released ~1.5 s) + heel-depower + monotone
+auto-hike to windward (sign keyed to the TACK, not instantaneous heel, so it never
+pumps the roll) + scripted tack/gybe; 'arcade' = assisted + anti-stall bear-off
+after >2 s in irons + heavier capsize-prevention depower. Tests:
+`tests/unit/game/assist/assist.test.ts` (14, pure semantics) +
+`closedLoop.test.ts` (6, real `BoatSimulation`). No three.js, no DOM, no shared
+module state.
+
+**SPEED-GAP root causes (item 1) — found with a fixed-state force-balance harness:**
+1. **Residuary resistance was dimensionally wrong** (`0.5·ρ·S·V²·Cr`), producing
+   **~190 N at 5 kt** (≈14% of the 133 kg boat's displacement weight) — physically
+   impossible for a planing dinghy and the wall that pinned the closed-loop sim at
+   ~2.5 kt. Fixed to the Froude/Delft displacement-weight convention
+   **`R_r = C_r·ρ·g·∇`** (Larsson & Eliasson, Delft Systematic Yacht Series) in
+   `HydroResistance.ts` AND `PolarSolver.ts`, and recalibrated the dinghy
+   `residuaryCurve` to that convention. Total hull resistance at 5 kt is now
+   **Rf 39 + Rr 48 ≈ 86 N** (task-cited ILCA band ~40–70; Chalmers Olympic-Laser
+   CFD order of magnitude). Added a documented high-Fn (>0.5) V²-growing
+   planing/spray tail so the extreme 30–40 kt storm soak stays bounded (the
+   displacement-weight form is V-independent and otherwise removed the high-speed
+   brake the old form secretly provided — that regression surfaced in the 35 kt
+   soak and the tail fixes it).
+2. **PolarSolver velocity triangle had the boat-speed sign inverted**
+   (`tws·cos(twa) − speed` for the comes-from-ahead component; correct is
+   `+ speed`). On a beam reach this made the computed AWA WIDEN past 90° as the
+   boat sped up, so the drive term grew without bound and the solver ran away to
+   the 2.5·TWS clamp (~30 kt). Fixed → AWA shrinks with speed as it must.
+
+**Before → after:** polar beam reach @12 kt **5.64 → 6.55 kt** (now genuinely
+balanced, not drag-capped); @10 kt **6.61 kt**; close-hauled 45° @12 kt 5.5 kt;
+upwind VMG optimum **35° → 45°** (textbook — resolves the predecessor's documented
+Task-E reduction as a side effect, item 4); time-domain force balance now supports
+**5.8 kt** on a 12 kt beam reach (was ~2.5). leeway < 10° on the reach.
+
+**Item 2 (stay up in a breeze):** with the assist's auto-hike + heel-depower the
+dinghy holds a **15 kt beam reach for 60 s with no capsize** (heel settles ~15°);
+**25 kt cleated no-hike still capsizes at ~6.3 s** (preserved). The righting curve
+(form + 75 kg crew at 0.75 m) peaks ~900 N·m at 20° vs a close-reach sail heeling
+moment of a few hundred N·m — ample on paper; the limiter is the transient roll
+coupling, not the magnitude. A 20 kt CLOSE reach still capsizes under a steady
+controller (documented reduction).
+
+**Item 3 (tack/gybe), closed-loop against the real sim:** gybe from a broad reach
+in 10 kt completes without capsize and returns to idle ✓; a tack through the wind
+onto the opposite tack completes (TWA sign flips, >60% speed recovery, no capsize,
+phase→idle) from a close reach in one rotational sense ✓; from the other tack the
+frozen model's near-head-to-wind port/starboard asymmetry + the low (~2–4 kt) entry
+speed a non-anticipating controller carries mean the bow can stall short of the eye
+— the assist is asserted to do so SAFELY (no capsize, always hands control back via
+the 12 s safety timeout) ✓; 'simulation' ignores tack commands ✓; arcade bears off
+out of irons by itself ✓; a player sheet override is honoured then released ✓.
+
+**One tried-and-REVERTED fix (per the "plausible fix breaks a different invariant"
+doctrine):** rotating the sail CoE application point with the hull (heeling arm ∝
+cos heel — physically correct and would self-limit close-hauled heel) diverged the
+35 kt / 3 m WaveDrag soak to ~1e97. Reverted; the world-vertical CoE is kept with a
+code comment recording why.
+
+**Tests/goldens:** `golden.test.ts` baseline RE-RECORDED (x 25.64→28.30, speed
+1.59→1.77, pathLength 28.47→30.72) because the correct lower drag legitimately
+moves the open-loop trajectory; the negative control (double the residuary curve)
+still diverges, so the golden stays binding. `sailing.test.ts`'s two closed-loop
+proofs now auto-trim via `idealSheetFor` (beam reach) / run under the real assist
+(upwind VMG at a holdable 55° close reach, +windward made good) since the faster
+boat stalls the old fixed-sheet controller — the harness was updated to the
+corrected physics, expectations not loosened.
+
+
 
 Root cause of the NaN/roll fragility (with evidence), found via a calm-water
 diagnostic harness (WaveDrag off, damping off):
@@ -173,8 +665,10 @@ run `npm run ci` (per task). `src/types` untouched.
 | H — Audio and UI | 🚧 in progress | **H.3 HUD done** (`src/game/hud/` view-models + `src/ui/hud/` React/Zustand). **H.4 Cameras & photo mode done** (`src/game/camera/` pure models + `src/render/camera/` three driver) — see "Stream H.4" below. Audio + other UI not started. `src/input/` exists (G.1). |
 | I — Boat rendering | ✅ complete (2/2) | `src/render/boat/`, `src/render/cloth/` |
 
-Phases 2, 3 and 4 are untouched. **Nothing in Streams D/E/F/I is wired to the app entry point** — that is
-Phase 2 task 2.1 ("first sail"). The deployed site (sailing.messana.ai) still shows only the bootstrap UI.
+Phases 3 and 4 are untouched. **Phase 2 task 2.1 ("first sail") is now wired: `src/app/Session.ts`
+assembles Streams D/E/F/I + weather/environment/boats/venues/input/HUD/camera into a playable
+session, and `src/main.ts` boots it.** See the "Phase 2 task 2.1 — first sail wiring" section below.
+The deployed site will show the game on the next push (the app entry now renders it).
 
 ---
 
@@ -513,7 +1007,152 @@ NOAA reference at 2023-06-21 16:00 UTC (elev 69.45°, az 148°) rather than inve
 
 ---
 
-## D.8 scoping decision — materials live in `src/render/`, not `src/generation/`
+## Phase 2 task 2.1 — first sail WIRING (complete 2026-10-24, uncommitted)
+
+**THE GAME IS PLAYABLE.** `src/app/` now assembles every completed stream into a session that
+launches into Newport in real weather (with the offline fallback ladder) and sails the dinghy with
+the keyboard. Owned by the Session stream: `src/app/**` + `src/main.ts` + `index.html` (unchanged) +
+two small additive edits elsewhere (below).
+
+Files:
+- `src/app/Session.ts` — `createSession(opts)` async → `Session{start/pause/resume/dispose}`. Loads
+  the weather snapshot (4 s network timeout → offline ladder), builds the venue environment
+  (`createVenueEnvironment`, tide aligned to `snapshot.fetchedAt`), generates the terrain mesh
+  (`buildVenueTerrain` → `toBufferGeometry` + `buildProceduralMaterial('terrain')`) and the landmarks
+  (via the generator registry, concrete material), builds the boat (`createBoatSimulation` + `BoatView`,
+  spawned at `venue.spawn` heading up the beat) and its polar (`solvePolar`, for the HUD target), the
+  ocean (`createOceanClipmap` + `buildWaterMaterial`, water assigned to every ring), the atmosphere
+  (`createAtmosphereSystem` driving sky/clouds/night/shadows + the water sun/sky/gust hookups),
+  the post chain (`atmosphere.createPost`), the camera (`createCameraController` + `CameraRig`), input
+  (`InputManager` + `ControlsAdapter` + `BindingMap` via `LocalStorageKeyValueStore`), the HUD
+  (`createHudStore` + `mountHud` + `createHudPublisher`, `buildHudViewModel` each frame), and the
+  120 Hz game loop (`createGameLoop`). The fixed step runs in the mandated order **input → assist →
+  sim.setControls → sim.step**; render interpolates (`BoatView.update(alpha)`), updates ocean +
+  atmosphere + camera, then `post.render()`. React never touches the render loop (HUD is published
+  through the 10 Hz throttle). Per-frame allocation is kept low (scratch objects reused).
+- `src/app/sessionHelpers.ts` — pure, headless helpers factored out for testability:
+  `sessionTimeFor`, `sampleTrueWind`/`computeApparentWind`/`signedAngleOffBow`/`courseOverGround`,
+  `buildHudInput`, `buildCameraFrame`, `runFixedStep` (the ordering contract), `parseLaunchOptions`
+  (`?backend/autosail/offline/speed`), `ScriptedInputProvider` (the autosail sequence: sheet in →
+  close-hauled → tack at session-time 20 s), `toAssistLevel`.
+- `src/app/assistStub.ts` — the `createSailingAssist` seam stub (see the seam note below).
+- `src/main.ts` — real bootstrap: renderer (`?backend=webgl` forces WebGL2) → `createSession` → boot
+  overlay removed on the first frame → fatal error UI on failure. Shows the WebGL2 fallback notice
+  banner (req 7.13, text from `src/ui/strings.ts`) when the backend is WebGL2, and publishes the
+  `window.__sailing` test hook (`frames, boatSpeedKnots, heading, tackCount, errors, backend,
+  weatherSource, done`).
+
+Two small additive edits outside `src/app` (both backwards-compatible, no behaviour change for
+existing code):
+- `src/render/Renderer.ts` — `createRenderer(canvas, onDeviceLost?, forceWebGL=false)` gained the
+  optional `forceWebGL` arg for `?backend=webgl`.
+- `src/three-env.d.ts` — added the standard three members the minimal ambient decl lacked:
+  `Object3D.scale` and `Vector3.setScalar` (purely additive; `src/types/` untouched, file NOT deleted).
+
+### The assist seam — kept on the stub (deliberate)
+
+`src/game/assist/index.ts` HAS landed (concurrent agent), but at wiring time its own tests were
+failing (a `he is not defined` crash in `_runManoeuvre`, and an `AssistLevel` export mismatch its
+`closedLoop.test.ts` trips on) and the file is still being actively edited. Switching Session's import
+to it now would make the verified-working first sail depend on another agent's mid-write, crashing
+module. So Session imports `createSailingAssist` from `./assistStub` (same `AssistFrame` /
+`SailingAssist` shape agreed for the seam). **To switch when the real module is green: change the one
+import line at the top of `Session.ts` to `import { createSailingAssist } from '@/game/assist';`
+(and its `AssistFrame`/type import) and delete `src/app/assistStub.ts`.** The stub models a scripted
+tack so the browser smoke test can observe `tackCount ≥ 1`.
+
+### Verification
+
+- `tests/unit/app/` — 26 new tests across `sessionHelpers.test.ts` (21), `assistAndWeather.test.ts`
+  (4), `inputDisposal.test.ts` (1), all passing (`npx vitest run tests/unit/app` → 44/44 incl. the
+  pre-existing gameloop tests). They assert: fixed-step ordering (input→assist→sim), knots live ONLY
+  in the HUD format layer (HudInput stays SI), the offline weather path yields a `climatology`-labelled
+  snapshot, and `InputManager.dispose()` releases every listener.
+- `npx tsc --noEmit` — zero errors in `src/app`, `src/main.ts`, the two edited files, and
+  `tests/unit/app` (the only repo tsc errors are in concurrently-in-flight `tests/unit/boats/*` and
+  `tests/unit/game/assist/*` owned by other agents).
+- `npx eslint … --max-warnings 0` — clean (exit 0) for all Session-stream files.
+- `vite build` — succeeds (222 modules). `node scripts/check-no-assets.mjs` — pass (no mesh/texture/
+  audio). `node scripts/check-budget.mjs` — **347.3 kB gzipped, 6.8% of the 5 MB budget** WITH the
+  whole game now imported by the app entry (no longer tree-shaken out).
+- **Real-browser smoke test (headless Chrome / SwiftShader, WebGL2 backend)** — harness at
+  `%TEMP%\sailing-smoke-game` (copied + retargeted from `sailing-smoke-light` to the real app root on
+  port 5203, `?backend=webgl&autosail=1&offline=1&speed=8`). Result: `backend=webgl2`,
+  `weatherSource=climatology`, 45 frames, `boatSpeedKnots≈1.1`, **tackCount=1**, `done=true`, **zero
+  shader/TSL/runtime errors** (only a benign favicon 404). Screenshots at 2/8/16/26 s show sea + pale
+  overcast sky + horizon + sun glitter + the boat (heeling 1°→4° as it sails) + the FULL HUD updating
+  (wind, speeds in knots, compass HDG swinging 204°→189° through the tack, trim gauges, and the
+  **"SOURCE: Seasonal average (offline)"** label — the offline fallback requirement). TAA correctly
+  off on WebGL2 (no `TRAANode` weak-map crash). `?backend=webgpu` on headless SwiftShader falls back
+  to WebGL2 and runs clean (50 frames, tack fired, 0 errors), as expected.
+
+### Honest reductions / what looks wrong (labelled in code + here)
+
+- **Ocean waves — WIRED end to end (RenderLook, 2026-10-24).** The Session now builds a real
+  spectrum-derived `WaveField` from the snapshot sea state (`buildWaveFieldForVenue` → 24 JONSWAP+swell
+  components; Hs matches the snapshot, e.g. Newport offline Hs≈0.70 m) and injects it into
+  `createVenueEnvironment` via an additive `waveField` option (forwarded to the frozen
+  `createEnvironment`, which otherwise used a FLAT STUB — that stub, not the clipmap, was the real
+  "flat sea" root cause: `environment.waves.components` was length 0). The clipmap water material
+  (`WaterMaterial`) now takes those SAME components plus a shared session-time uniform and displaces
+  every ring per-vertex with a Gerstner sum (`buildGerstnerPositionNode`) + an analytic normal
+  (`buildGerstnerNormalNode`), both line-for-line the math in `WaveFieldCPU`. Visible surface and
+  physics therefore agree BY CONSTRUCTION: `tests/unit/render/waveCoherence.test.ts` measures the
+  render-path vs `WaveFieldCPU` height/displacement error at **< 1e-6 m** (requirement 4.12's 5 cm is
+  met with ~4 orders of magnitude of margin). Verified in the real browser (WebGL2): the sea shows
+  moving swell + chop with a stable, believable horizon, 0 shader errors. The phase clock is the
+  physics session time (`waveTimeUniform.value = t` each frame).
+- **Black boat — FIXED (RenderLook, 2026-10-24).** Root cause: the scene's only analytic light was the
+  ShadowRig's directional sun, scaled by the RELATIVE `sunIlluminance` (≈0 under overcast), with NO
+  ambient/hemisphere term and no guaranteed IBL — every PBR material rendered near-black. Added
+  `src/render/lighting/SceneLighting.ts` (a hemisphere + ambient fill driven by `LightingState`, lifted
+  toward a bright near-white under overcast) and a `SUN_KEY_GAIN` on the ShadowRig sun. The near-white
+  sail now reads as lit sailcloth and the hull shows sun-side/shadow-side shading in the real-browser
+  run. Water glare was tamed (turbidity-capped Fresnel so Newport reads green-blue turbid per
+  art-direction §4.1, glitter scaled to a sun track not a sheen). Camera: default `horizonLock` lowered
+  to 0.35 (level horizon), chase framing pulled back/up, and a `?cam=chase|helm|drone|mast` start-camera
+  param added (parsed in `main.ts`). helm/drone verified in the browser.
+- **Water radial-streak aliasing — FIXED (WaterBoatLook, 2026-10-24).** The second browser run showed
+  the sea as dense radial NEEDLE STREAKS converging on the horizon: the Gerstner sum (and especially its
+  analytic normal) applied ALL components identically on every clipmap ring, but the far rings have
+  vertex spacing up to 64 m (0.5·2^7), so sub-grid chop (λ ≲ a few m) aliased badly and the sub-vertex
+  normal detail made needle specular. Fix = per-ring band-limiting: `bandLimitWeight(k, spacing)`
+  (smoothstep fade to 0 as λ → 2·spacing, full at λ ≥ 4·spacing), threaded as a `spacing` arg into
+  `buildGerstnerPositionNode`/`buildGerstnerNormalNode`; a camera-distance normal flatten toward (0,1,0)
+  (`flatStart`/`flatEnd`) and a Toksvig-style distance roughness+glitter widening
+  (`buildDistanceRoughnessNode`). `WaterMaterial` gained `vertexSpacing` + `cameraPositionUniform`;
+  `Session` builds ONE water material PER ring at that ring's cell size with a shared camera uniform,
+  and `syncWaterLighting` fans the atmosphere's sun/sky/gust uniforms across all rings. Near-ring
+  coherence proven < 5 cm and band-limit weight monotonicity/zero-below-Nyquist proven in
+  `waveCoherence.test.ts` (new tests). Browser-verified: broad resolved swell + soft hazy horizon, no
+  streaks.
+- **Hull invisible — FIXED (WaterBoatLook, 2026-10-24).** Two compounding causes. (a) The near-white
+  gelcoat hull was invisible against the pale overcast sea → `BoatView.pickVisibleHullColor` now uses
+  the boat's distinctive `appearance.deckColor` (navy for the DINGHY) when `hullColor` is near-white.
+  (b) The boat floated too low: physics settles the keel ~0.25–0.34 m below mean water (measured via a
+  temporary debug) — deeper than the ~0.12 m design draft, so the 0.49 m-tall hull was almost awash. The
+  deep sink is a `src/physics`/`src/boats` buoyancy-calibration matter OWNED BY ANOTHER STREAM, not
+  render. Render-side flotation presentation added (`BoatView.setHeaveOverride`; Session sets the keel
+  to `waveHeight(boat) − waterlineHeight` each frame) so the hull sits AT its design waterline on the
+  VISIBLE sea with full deck freeboard and still bobs with the waves — labelled rendering presentation,
+  physics heave untouched. Browser-verified from chase/drone: navy hull sitting in the water.
+- **Flat grey sail — IMPROVED (WaterBoatLook, 2026-10-24).** The generic single-sided `buildSailcloth`
+  showed its unlit BACK face to the astern chase camera (flat uniform grey). Replaced with
+  `src/render/boat/sailSurfaceMaterial.ts`: two-sided (`DoubleSide`) CREAM cloth, panel seam lines from
+  the generator's vertex-colour panel fraction, a backlit scatter glow, matte roughness. Camber + twist
+  come from the baked sail geometry (`SailSurfaceGenerator` luffRound/twist). A full pressure-driven PBD
+  deform (`src/render/cloth/`) is a richer future wiring — labelled step up from the flat placeholder,
+  not presented as the full cloth sim. Browser-verified from drone orbit: cream two-sided sail.
+- **Autosail over-heel / capsize — NOT a render defect (owned by physics/assist).** During the scripted
+  autosail run the dinghy over-heels and sometimes capsizes in the breeze (HEEL 58–84°). This is the
+  documented physics roll-fragility / tack-capsize limit (`src/physics`/`src/game/assist`), unchanged by
+  this pass. The hull + sail render correctly through the heel/capsize.
+- **Ambient vessels / traffic not placed** (no render view for ambient vessels exists yet — the known
+  Phase-2 gap from Stream F). Skipped and logged once.
+- **Weather is `climatology` under `?offline=1`** in the test (no network in the harness). The live
+  path (`resolveWeather` → Open-Meteo, 4 s timeout → offline ladder) is wired and used when online.
+
+
 
 Tasks.md lists D.8 under Stream D, but TSL (`three/tsl`) is a three.js API, and `generation/` is
 ESLint-forbidden from importing three.js (the import boundary that keeps physics headlessly
@@ -583,10 +1222,12 @@ via `.github/workflows/deploy.yml`. Configuration:
   the DNS `CNAME` record pointing `sailing.messana.ai` → `m3ssana.github.io`. If Pages is ever
   reconfigured, both of these are manual steps outside version control — check Settings → Pages
   first if the deployed site stops resolving.
-- **The deployed site is not yet the game.** No app-entry-point wiring exists yet connecting
-  Stream D/E/I's generation and rendering code to what actually renders at the URL — that's
-  Phase 2 integration work (task 2.1, "first sail"), not started. Visiting the URL currently
-  shows whatever the pre-existing bootstrap UI renders.
+- **The deployed site renders the game as of Phase 2 task 2.1.** `src/main.ts` now boots a
+  `Session` (`src/app/Session.ts`) that wires Stream D/E/F/I's generation/rendering + the
+  weather/environment/boats/venues/input/HUD/camera stacks into a playable first sail. On the
+  next push to `main`/`master` the deployed URL will show the game (sea + sky + boat + HUD) rather
+  than the bootstrap UI. Verified in headless Chrome / SwiftShader (WebGL2) — see the Phase 2 §2.1
+  section below.
 
 ---
 
@@ -605,6 +1246,18 @@ Things that cost real debugging time. Do not rediscover them.
   direction is where it flows **TOWARDS**. That asymmetry is inherited from Open-Meteo and is
   deliberate. `windVector()` returns the air's velocity, pointing opposite the meteorological bearing.
 - **World space:** Y-up, right-handed, `+X` east, `+Z` **south**. Bearing θ → `(sin θ, 0, -cos θ)`.
+- **Heading quaternion (ONE frame — HeadingUnify, 2026-10-24):** body axes are forward = `-Z_body`,
+  starboard = `+X_body`, up = `+Y_body` (right-handed: `starboard = forward × up`). The orientation for
+  bearing `h` is a rotation about `+Y` by **`-h`** (`quatFromHeading(h)`), NOT `+h` — because a bearing
+  increases clockwise from above while `+Y` rotation is counter-clockwise. With it
+  `rotateVec3(quatFromHeading(h), (0,0,-1)) === (sin h,0,-cos h)`, so the quaternion frame equals the
+  physical `(sin h,…)` force-generator frame — there is only ONE frame. `headingFromQuat(q)=atan2(f.x,-f.z)`
+  on the real rotated forward; `heelFromQuat` is +=starboard-down; `pitchFromQuat` is +=bow-up;
+  `fromYawPitchRoll(h,0,0)===quatFromHeading(h)`. Build body axes with `forwardFromQuat/starboardFromQuat/
+  upFromQuat`, never by re-synthesising `(sin h,…)`. `BoatSpec.inertia` diagonal is `{x:pitch, y:yaw,
+  z:roll}`. `+rudder` RAISES heading, `+ω_y` LOWERS it → heading-hold helm is `rudder=-(heading-target)·Kp
+  + ω_y·Kd`. The old `fromAxisAngle({0,1,0}, +h)` was the X-mirror of all this — the root cause of the
+  heading-dependent capsize/half-speed; proven fixed by `tests/unit/physics/rotationInvariance.test.ts`.
 - **Units:** SI and radians internally, always. Knots and nautical miles exist only in the UI layer.
 
 ### Traps in the toolchain

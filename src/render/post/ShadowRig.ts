@@ -89,6 +89,14 @@ export interface ShadowRig {
   dispose(): void;
 }
 
+/**
+ * Absolute key-light gain applied to the directional sun. `LightingState`
+ * illuminance is relative (1.0 = clear zenith sun); a three DirectionalLight
+ * needs a larger absolute intensity to act as the key over the ambient fill
+ * under ACES tone mapping. Labelled rendering-layer calibration.
+ */
+const SUN_KEY_GAIN = 3.0;
+
 function clampCascades(n: number): 1 | 2 | 3 | 4 {
   const c = Math.min(4, Math.max(1, Math.round(n)));
   return c as 1 | 2 | 3 | 4;
@@ -168,11 +176,17 @@ export function createShadowRig(
         light.visible = true;
         light.castShadow = true;
 
-        // Sun colour + intensity from LightingState.
+        // Sun colour + intensity from LightingState. `sunIlluminance` is a
+        // RELATIVE 0..1 value; a three DirectionalLight needs a larger absolute
+        // intensity to read as a key light over the hemisphere/ambient fill
+        // (SceneLighting) under ACES tone mapping. SUN_KEY_GAIN is a labelled
+        // rendering-layer calibration (clear-day key ≈ 3.0, overcast tapers with
+        // the illuminance). The `sunIntensity <= 0` visibility gate above still
+        // uses the un-gained value, so night/full-overcast still disables it.
         light.color.r = lighting.sunColor.r;
         light.color.g = lighting.sunColor.g;
         light.color.b = lighting.sunColor.b;
-        light.intensity = sunIntensity;
+        light.intensity = sunIntensity * SUN_KEY_GAIN;
 
         // Fit this cascade's slice using the pure model.
         const sliceNear = splits[i] ?? near;

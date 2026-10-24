@@ -62,6 +62,7 @@ import {
   Fn,
   float,
   vec3,
+  mix,
   uniform,
   positionLocal,
   positionWorld,
@@ -139,6 +140,52 @@ export interface SpectrumFallbackHandle {
   dispose(): void;
 }
 
+// ─── Per-ring band-limiting (anti-aliasing) ───────────────────────────────────
+
+/**
+ * Lower edge of the band-limit ramp, as a MULTIPLE of the local vertex spacing.
+ * A sinusoid needs ≥2 samples per wavelength to be representable at all
+ * (Nyquist), but a Gerstner component sampled at barely-Nyquist still aliases
+ * badly and produces the needle/moiré streaks the first browser run showed. We
+ * start fading a component's amplitude to zero once its wavelength drops below
+ * `BAND_LIMIT_HI × spacing` and have it fully gone by `BAND_LIMIT_LO × spacing`.
+ */
+export const BAND_LIMIT_LO = 2.0;
+/** Upper edge of the ramp: components with λ ≥ this × spacing are fully kept. */
+export const BAND_LIMIT_HI = 4.0;
+
+/**
+ * Smooth Hermite step, matching GLSL/WGSL `smoothstep(edge0, edge1, x)`.
+ * Returns 0 for x ≤ edge0, 1 for x ≥ edge1, with a smooth S-curve between.
+ */
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  if (edge0 === edge1) return x < edge0 ? 0 : 1;
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * Band-limit weight for a single wave component at a given local vertex spacing.
+ *
+ * Returns a weight in [0, 1] that is:
+ *  - **1** when the component's wavelength is comfortably resolvable at this
+ *    spacing (λ ≥ BAND_LIMIT_HI × spacing) — e.g. every component on the near
+ *    (0.5 m) ring where the boat sits, so physics↔render coherence is untouched;
+ *  - **0** when the wavelength is below the Nyquist-ish floor
+ *    (λ ≤ BAND_LIMIT_LO × spacing) — the sub-grid chop that aliases into streaks
+ *    on the coarse far rings;
+ *  - a smooth ramp between.
+ *
+ * `wavenumber` is k = 2π/λ (rad/m); spacing is world units between vertices.
+ * Monotone **non-decreasing** in λ and monotone **non-increasing** in spacing,
+ * which the unit tests assert.
+ */
+export function bandLimitWeight(wavenumber: number, spacing: number): number {
+  if (!(spacing > 0) || !(wavenumber > 0)) return 1;
+  const wavelength = (2 * Math.PI) / wavenumber;
+  return smoothstep(BAND_LIMIT_LO * spacing, BAND_LIMIT_HI * spacing, wavelength);
+}
+
 // ─── Low-tier: Vertex shader Gerstner sum ─────────────────────────────────────
 
 /**
@@ -156,10 +203,22 @@ export interface SpectrumFallbackHandle {
  *   dz += -steepness * amplitude * dirZ * sin(...)
  *
  * This is exactly WaveFieldCPU.ts's displacement() function.
+ *
+ * ### Per-ring band-limiting (`spacing`)
+ *
+ * When `spacing` (world units between adjacent vertices on THIS ocean ring) is
+ * supplied, each component's amplitude is multiplied by {@link bandLimitWeight}
+ * so components whose wavelength is too short to be resolved at this spacing are
+ * faded out — killing the radial aliasing streaks the coarse far rings produced.
+ * On the near ring (spacing 0.5 m) every real component weighs ≈1, so the boat
+ * still sits in the full-resolution sea (req 4.12 coherence preserved). Omit
+ * `spacing` (or pass ≤0) to keep every component (the original behaviour, used
+ * by the coherence test's CPU path).
  */
 export function buildGerstnerPositionNode(
   components: readonly WaveComponent[],
   timeUniform: TSLNode & { value: unknown },
+  spacing = 0,
 ): TSLNode {
   const count = Math.min(components.length, MAX_VERTEX_COMPONENTS);
 
@@ -183,7 +242,11 @@ export function buildGerstnerPositionNode(
       const c = components[i];
       if (c === undefined) continue;
 
-      const amplitude = float(c.amplitude);
+      // Band-limit weight baked in at build time (constant per ring).
+      const w = spacing > 0 ? bandLimitWeight(c.wavenumber, spacing) : 1;
+      if (w <= 0) continue; // fully below this ring's resolution — skip entirely
+
+      const amplitude = float(c.amplitude * w);
       const wavenumber = float(c.wavenumber);
       const frequency = float(c.frequency);
       const phase = float(c.phase);
@@ -212,6 +275,164 @@ export function buildGerstnerPositionNode(
   })();
 
   return node;
+}
+
+/**
+ * Build a TSL normalNode for the Gerstner-displaced surface, analytic and
+ * exactly matching `WaveFieldCPU.ts`'s `normal()` (so the lit/glittering
+ * surface the player sees agrees with the physics normals). Uses the
+ * `T_z × T_x` cross-product order mandated by the project convention (the
+ * upward normal for a Y-up parametric surface; `T_x × T_z` would yield
+ * `(0, −1, 0)` on flat water).
+ *
+ * Statically unrolled at build time for the same reason as the position node
+ * (WebGL2 TSL has no dynamic loops over a varying count). Rebuild when the
+ * spectrum changes.
+ *
+ * ### Per-ring band-limiting + far-field flattening (`opts`)
+ *
+ * Normals carry FINER detail than positions — a sub-vertex ripple that barely
+ * perturbs height tilts the normal sharply, which is exactly what produced the
+ * needle-specular streaks in the first run. Two defences, both opt-in via
+ * `opts`:
+ *  - `spacing`: each component's normal contribution is weighted by
+ *    {@link bandLimitWeight}, so only components resolvable at this ring's
+ *    vertex spacing tilt the normal (matching the position node). Near ring →
+ *    all components → coherent with physics; far rings → only the long swell.
+ *  - `cameraPosition` + `flatStart`/`flatEnd`: beyond `flatStart` metres from
+ *    the camera the perturbed normal is blended toward the flat up-normal
+ *    `(0,1,0)`, fully flat by `flatEnd`, so the distant sea reads as a smooth
+ *    sky-reflecting haze band at the horizon rather than a field of aliased
+ *    glints. This is a documented rendering-layer approximation (it does not
+ *    affect physics — the boat is always in the near field).
+ *
+ * Omit `opts` to keep the exact analytic normal with every component (the
+ * original behaviour, used by the coherence path).
+ */
+export interface GerstnerNormalOptions {
+  /** Local vertex spacing of this ring (world units). Enables band-limiting. */
+  spacing?: number;
+  /**
+   * Camera world position uniform. Enables the distance-based flatten toward
+   * the horizon. When omitted, the normal is not distance-faded.
+   */
+  cameraPosition?: TSLNode;
+  /** Distance (m) at which the normal begins fading toward flat. Default 120. */
+  flatStart?: number;
+  /** Distance (m) by which the normal is fully flat. Default 600. */
+  flatEnd?: number;
+}
+
+export function buildGerstnerNormalNode(
+  components: readonly WaveComponent[],
+  timeUniform: TSLNode & { value: unknown },
+  opts: GerstnerNormalOptions = {},
+): TSLNode {
+  const count = Math.min(components.length, MAX_VERTEX_COMPONENTS);
+
+  if (count === 0) {
+    return vec3(0.0, 1.0, 0.0);
+  }
+
+  const spacing = opts.spacing ?? 0;
+  const flatStart = opts.flatStart ?? 120;
+  const flatEnd = opts.flatEnd ?? 600;
+  const camPos = opts.cameraPosition;
+
+  const node: TSLNode = Fn(() => {
+    const worldPos = positionWorld;
+    const wx = worldPos.dot(vec3(1.0, 0.0, 0.0));
+    const wz = worldPos.dot(vec3(0.0, 0.0, 1.0));
+    const t = timeUniform;
+
+    // Accumulate the Gerstner displacement partial derivatives.
+    let dDy_dx: TSLNode = float(0.0);
+    let dDy_dz: TSLNode = float(0.0);
+    let dDx_dx: TSLNode = float(0.0);
+    let dDx_dz: TSLNode = float(0.0);
+    let dDz_dx: TSLNode = float(0.0);
+    let dDz_dz: TSLNode = float(0.0);
+
+    for (let i = 0; i < count; i++) {
+      const c = components[i];
+      if (c === undefined) continue;
+
+      const w = spacing > 0 ? bandLimitWeight(c.wavenumber, spacing) : 1;
+      if (w <= 0) continue;
+
+      const ki = float(c.wavenumber);
+      const dxi = float(c.direction.x);
+      const dzi = float(c.direction.y); // Vec2.y = world Z
+      const ai = float(c.amplitude * w);
+      const qi = float(c.steepness);
+
+      const kDotP = ki.mul(dxi.mul(wx).add(dzi.mul(wz)));
+      const phi = kDotP.sub(float(c.frequency).mul(t)).add(float(c.phase));
+      const cosP = phi.cos();
+      const sinP = phi.sin();
+      const Ak = ai.mul(ki);
+      const QAk = qi.mul(Ak);
+
+      dDy_dx = dDy_dx.sub(Ak.mul(dxi).mul(sinP));
+      dDy_dz = dDy_dz.sub(Ak.mul(dzi).mul(sinP));
+      dDx_dx = dDx_dx.sub(QAk.mul(dxi).mul(dxi).mul(cosP));
+      dDx_dz = dDx_dz.sub(QAk.mul(dxi).mul(dzi).mul(cosP));
+      dDz_dx = dDz_dx.sub(QAk.mul(dxi).mul(dzi).mul(cosP));
+      dDz_dz = dDz_dz.sub(QAk.mul(dzi).mul(dzi).mul(cosP));
+    }
+
+    // Tangents: T_x = (1 + dDx_dx, dDy_dx, dDz_dx), T_z = (dDx_dz, dDy_dz, 1 + dDz_dz)
+    const txx = float(1.0).add(dDx_dx);
+    const txy = dDy_dx;
+    const txz = dDz_dx;
+    const tzx = dDx_dz;
+    const tzy = dDy_dz;
+    const tzz = float(1.0).add(dDz_dz);
+
+    // Normal = T_z × T_x (flat water → (0,1,0)).
+    const nx = tzy.mul(txz).sub(tzz.mul(txy));
+    const ny = tzz.mul(txx).sub(tzx.mul(txz));
+    const nz = tzx.mul(txy).sub(tzy.mul(txx));
+
+    let normal: TSLNode = vec3(nx, ny, nz).normalize();
+
+    // Distance-based flatten toward the up-normal so the far sea reads as a
+    // smooth, sky-reflecting horizon band (kills far-field needle specular).
+    if (camPos !== undefined) {
+      const dx = worldPos.x.sub(camPos.x);
+      const dz = worldPos.z.sub(camPos.z);
+      const dist = dx.mul(dx).add(dz.mul(dz)).sqrt();
+      // 0 near (keep detail) → 1 far (flat).
+      const flat = dist.sub(flatStart).div(float(Math.max(1, flatEnd - flatStart))).clamp(0, 1);
+      normal = mix(normal, vec3(0.0, 1.0, 0.0), flat).normalize();
+    }
+
+    return normal;
+  })();
+
+  return node;
+}
+
+/**
+ * Build a scalar TSL node in [0,1] estimating how much sub-pixel normal
+ * variance the far sea carries, for a Toksvig-style roughness widening in the
+ * water material: 0 in the near field (crisp glitter), → 1 at the horizon
+ * (broaden the specular lobe so it is not a field of aliased needles). Driven
+ * by the same `flatStart`/`flatEnd` distance band as the normal flatten so the
+ * two stay consistent.
+ */
+export function buildDistanceRoughnessNode(
+  cameraPosition: TSLNode,
+  flatStart = 120,
+  flatEnd = 600,
+): TSLNode {
+  return Fn(() => {
+    const worldPos = positionWorld;
+    const dx = worldPos.x.sub(cameraPosition.x);
+    const dz = worldPos.z.sub(cameraPosition.z);
+    const dist = dx.mul(dx).add(dz.mul(dz)).sqrt();
+    return dist.sub(flatStart).div(float(Math.max(1, flatEnd - flatStart))).clamp(0, 1);
+  })();
 }
 
 // ─── Mid-tier: CPU-evaluated displacement textures ────────────────────────────
@@ -443,4 +664,7 @@ export const _testing = {
   LOW_TIER_COMPONENTS,
   MAX_VERTEX_COMPONENTS,
   evaluateCascadeTexture,
+  bandLimitWeight,
+  BAND_LIMIT_LO,
+  BAND_LIMIT_HI,
 } as const;

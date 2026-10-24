@@ -51,6 +51,7 @@ import {
   HydrodynamicDampingForceGenerator,
   DINGHY_HYDRO_DAMPING,
 } from '@physics/forces/HydrodynamicDamping';
+import type { HydrodynamicDampingConfig } from '@physics/forces/HydrodynamicDamping';
 
 /** The full result of building a boat for simulation. */
 export interface BuiltBoatSpec {
@@ -79,6 +80,11 @@ export interface CreateBoatSimulationOptions {
    * stability. Default on.
    */
   includeWaveDrag?: boolean;
+  /**
+   * Override the hydrodynamic damping config (roll/pitch/yaw + heave/surge).
+   * Defaults to {@link DINGHY_HYDRO_DAMPING}. Used by calibration probes/tests.
+   */
+  damping?: HydrodynamicDampingConfig;
 }
 
 /** The runnable simulation bundle returned by {@link createBoatSimulation}. */
@@ -161,7 +167,20 @@ function estimateInertia(def: BoatDefinition, hullMass: number, depth: number): 
   const pitch = (hullPitch + crewPitch + rigPitch) * (1 + ADDED_MASS_PITCH);
   const yaw = hullYaw + crewYaw + rigYaw;
 
-  return { x: roll, y: yaw, z: pitch };
+  // CANONICAL inertia-axis mapping (documented; shared with the integrator).
+  // Body axes: forward = −Z_body, starboard = +X_body, up = +Y_body. So the
+  // rotational modes map to the diagonal tensor components as:
+  //   • inertia.x = about body X (starboard/transverse axis)  = PITCH inertia
+  //   • inertia.y = about body Y (vertical axis)              = YAW inertia
+  //   • inertia.z = about body Z (longitudinal/forward axis)  = ROLL inertia
+  // The integrator (`computeWorldInertiaInverse`) resists rotation about local X
+  // with `.x` and about local Z with `.z`, so it reads `.x` as the transverse
+  // (pitch) axis and `.z` as the longitudinal (roll) axis — this mapping makes
+  // BoatFactory and the integrator agree. (Historical bug: this returned
+  // `{x: roll, z: pitch}`, transposing roll↔pitch — the hull resisted pitching
+  // with the small roll inertia and rolling with the large pitch inertia, which
+  // coupled heading-dependently through the world-inertia transform. Fixed.)
+  return { x: pitch, y: yaw, z: roll };
 }
 
 /** Translate a content {@link SailDefinition} into a physics {@link SailSpec}. */
@@ -344,13 +363,22 @@ export function createBoatSimulation(
 
   const sim = new BoatSimulationImpl(spec, opts.id ?? def.id);
 
-  const buoyancy = new BuoyancyForceGenerator();
+  // Design-draft reference depth for the buoyancy spring: the volume-weighted
+  // mean submergence of the buoyancy points AT the design waterline. Summed over
+  // the hull this makes total buoyancy = total weight exactly at the design
+  // waterline, so the hull floats at its design draft (not ~0.2 m deeper — the
+  // deep-sink the render layer used to hide with a heave-override hack). This is
+  // `waterlineHeight − centreOfBuoyancy.y` in the continuum, computed here from
+  // the actual lofted buoyancy points for robustness. See Buoyancy.ts.
+  const refDepth = designDraftRefDepth(def, spec);
+
+  const buoyancy = new BuoyancyForceGenerator(refDepth);
   const foils = new FoilLift();
   const resistance = new HydroResistance();
   const waveDrag = new WaveDragForceGenerator(opts.id ?? def.id, opts.eventBus);
   const aero = new AeroForce(spec);
   const righting = new RightingMoment();
-  const damping = new HydrodynamicDampingForceGenerator(DINGHY_HYDRO_DAMPING);
+  const damping = new HydrodynamicDampingForceGenerator(opts.damping ?? DINGHY_HYDRO_DAMPING);
 
   sim.addForceGenerator(buoyancy);
   sim.addForceGenerator(foils);
@@ -373,7 +401,32 @@ export function createBoatSimulation(
 }
 
 /**
- * A zero-force generator whose only job is to copy FoilLift's computed side
+ * Compute the buoyancy reference depth that floats the hull at its DESIGN
+ * waterline: the volume-weighted mean submergence of the buoyancy points at the
+ * design waterline (`Σ V_i·(waterlineHeight − py_i) / Σ V_i`). Each buoyancy
+ * point is a submerged-slice centroid whose hull-local y `py_i` lies below the
+ * design waterline; the mean of `(waterlineHeight − py_i)` weighted by point
+ * volume is exactly the submergence at which the summed buoyancy equals the
+ * displaced weight, so the equilibrium draft is the design draft. Falls back to
+ * the continuum value `waterlineHeight − centreOfBuoyancy.y` if the points carry
+ * no volume (should not happen for a valid hull).
+ */
+function designDraftRefDepth(def: BoatDefinition, spec: BoatSpec): number {
+  const wl = def.hull.waterlineHeight;
+  const pts = spec.hydrostatics.buoyancyPoints;
+  let totV = 0;
+  let totSub = 0;
+  for (const p of pts) {
+    const sub = wl - p.position.y;
+    if (sub <= 0) continue;
+    totV += p.volume;
+    totSub += p.volume * sub;
+  }
+  if (totV > 1e-9) return totSub / totV;
+  return Math.max(wl - spec.hydrostatics.centreOfBuoyancy.y, 0.03);
+}
+
+/**
  * force into HydroResistance before HydroResistance runs. Registered AFTER
  * FoilLift and BEFORE HydroResistance so the induced-drag term uses the current
  * step's side force with no latency.

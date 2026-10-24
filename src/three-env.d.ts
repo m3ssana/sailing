@@ -69,6 +69,7 @@ declare module 'three/webgpu' {
     y: number;
     z: number;
     set(x: number, y: number, z: number): this;
+    setScalar(s: number): this;
   }
 
   export class Euler {
@@ -93,6 +94,7 @@ declare module 'three/webgpu' {
     position: Vector3;
     rotation: Euler;
     quaternion: Quaternion;
+    scale: Vector3;
     up: Vector3;
     visible: boolean;
     name: string;
@@ -294,6 +296,11 @@ declare module 'three/webgpu' {
 
   export class AmbientLight extends Light {
     constructor(color?: number, intensity?: number);
+  }
+
+  export class HemisphereLight extends Light {
+    constructor(skyColor?: number, groundColor?: number, intensity?: number);
+    groundColor: Color;
   }
 
   export class PointLight extends Light {

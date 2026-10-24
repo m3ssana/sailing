@@ -36,7 +36,7 @@ export class HydroResistance implements ForceGenerator {
   totalSideForce = 0;
 
   evaluate(ctx: ForceContext, out: AppliedForce[]): void {
-    const { state, boat, environment, time, waterDensity } = ctx;
+    const { state, boat, environment, waterDensity } = ctx;
     const { linearVelocity, heading, position } = state;
 
     const speed = state.speed;
@@ -54,10 +54,46 @@ export class HydroResistance implements ForceGenerator {
     const frictionR = 0.5 * waterDensity * wettedSurface * speed * speed * cf;
 
     // --- 2. Residuary resistance (wavemaking) ---
+    // Froude/Delft convention: residuary resistance is non-dimensionalised by
+    // the DISPLACEMENT WEIGHT, not by dynamic pressure on the wetted surface.
+    //   R_r = C_r · ρ · g · ∇        (Larsson & Eliasson, "Principles of Yacht
+    //                                  Design", Delft Systematic Yacht Series;
+    //                                  the standard R_r/(ρ·g·∇) vs Fn form)
+    // so `residuaryCurve[i].y` is the dimensionless ratio R_r/W at that Froude
+    // number — a few percent near the Fn≈0.4 hump for a light planing dinghy,
+    // easing as the hull lifts and planes.
+    //
+    // The previous formulation (0.5·ρ·S·V²·C_r) was dimensionally a drag
+    // COEFFICIENT on wetted-surface dynamic pressure, which for this hull
+    // produced R_r ≈ 190 N at 5 kt (≈14% of the 133 kg boat's displacement
+    // weight) — physically impossible for a planing dinghy and the reason the
+    // closed-loop sim stalled at ~2.5 kt against a wall of phantom wavemaking
+    // drag while the real ILCA (and the computed polar at optimal trim) reach
+    // 5–7 kt. With the displacement-weight form and the recalibrated dinghy
+    // curve, total hull resistance at 5 kt is ~40–70 N (task-cited ILCA band;
+    // consistent with the Chalmers Olympic-Laser CFD study order of magnitude).
     const fn = froudeNumber(speed, lwl);
     const cr = sampleCurve(boat.residuaryCurve, fn);
-    // Residuary is typically given as a coefficient times dynamic pressure on waterplane.
-    const residuaryR = 0.5 * waterDensity * wettedSurface * speed * speed * cr;
+    const displacementWeight =
+      boat.hydrostatics.displacement * PHYSICS_CONSTANTS.GRAVITY;
+    let residuaryR = cr * displacementWeight;
+
+    // High-Froude quadratic tail. The displacement-weight residuary above is
+    // (correctly) a function of Fn only, so it does NOT grow with V² — which is
+    // right at sailing speeds but removes the steep V²-growing brake that the
+    // old wetted-surface form provided at EXTREME speed. In a 30–40 kt storm
+    // soak the hull is driven far past hull speed; with no V² term the speed can
+    // run up into a regime where the wave/slam couples diverge. Physically, past
+    // the hump a planing hull DOES accrue fast-growing dynamic pressure, spray
+    // and air drag (all ∝ V²). We add that only beyond the hump (Fn > 0.5), as a
+    // small coefficient on wetted-surface dynamic pressure, so sailing-speed
+    // resistance (Fn < 0.5) is untouched and the soak stays bounded. (Documented
+    // high-speed closure term, not a tuning knob for the sailing polar.)
+    if (fn > 0.5) {
+      const over = fn - 0.5;
+      const planingCd = 0.012 * over * over; // ramps in only well past hull speed.
+      residuaryR += 0.5 * waterDensity * wettedSurface * speed * speed * planingCd;
+    }
 
     // --- 3. Induced drag from side force ---
     // R_induced = sideForce² / (0.5 * rho * V² * π * draft² * e)
@@ -74,7 +110,14 @@ export class HydroResistance implements ForceGenerator {
     }
 
     // --- 4. Added resistance in waves ---
-    const waveR = addedResistanceInWaves(environment, position, heading, speed, lwl, time);
+    // A bounded, physically-calibrated INCREMENT: real added resistance for a
+    // small dinghy in a Hs≈0.7 m sea is ~10–25% of the calm-water resistance
+    // (higher beating into it, near zero running with it), NOT the +200–300% the
+    // previous absolute formula produced close-hauled (which collapsed the boat
+    // to ~1 kt in the real Newport sea — the reported defect). It is expressed as
+    // a fraction of the calm friction+residuary resistance and clamped.
+    const calmHullR = frictionR + residuaryR;
+    const waveR = addedResistanceInWaves(environment, heading, speed, lwl, calmHullR);
 
     // --- Total resistance, opposing motion ---
     const totalR = frictionR + residuaryR + inducedR + waveR;
@@ -124,47 +167,62 @@ export function froudeNumber(speed: number, waterlineLength: number): number {
 }
 
 /**
- * Added resistance in waves — the extra drag from the hull slamming through
- * oncoming seas. Proportional to significant wave height squared, modulated by
- * encounter frequency and relative heading.
+ * Added resistance in waves — the extra drag from the hull working through a
+ * seaway, as a BOUNDED FRACTION of the calm-water resistance.
  *
- * In a head sea the encounter frequency is high and the boat hits every wave;
- * running downwind the encounter is low and the boat surfs with the waves.
+ * Physics + calibration. Added resistance in waves grows with Hs² and is
+ * strongly heading-dependent (worst beating into a head sea, near zero running
+ * with it). For a SMALL, light dinghy that rides over short wind-chop rather
+ * than plowing through it, the measured added resistance at Hs≈0.7 m is modest —
+ * on the order of 10–25 % of the calm resistance beating, tapering to ~0 running
+ * (Bethwaite, "High Performance Sailing", ch. on waves & drag; this is an order-
+ * of-magnitude engineering calibration, not a quoted coefficient).
+ *
+ * The PREVIOUS formula computed an ABSOLUTE force
+ * (`0.5·ρ·lwl·0.3·Hs²·headSea·encounterMod·sizeFactor`) that, at the low
+ * close-hauled speed and resistance of this dinghy, reached +200–300 % of the
+ * calm resistance — it was the dominant term that collapsed the boat to ~1 kt in
+ * the real Newport Hs 0.7 m sea (the reported defect). Here it is instead a
+ * fraction of the calm hull resistance, Hs²-scaled, heading-weighted, and hard-
+ * clamped to ≤ 35 % so a seaway slows the boat realistically without stopping it.
+ *
+ * @param calmHullR calm-water friction+residuary resistance, N (the baseline the
+ *   added resistance is a fraction of).
  */
 function addedResistanceInWaves(
   environment: ForceContext['environment'],
-  _position: Vec3,
   heading: number,
   speed: number,
   lwl: number,
-  _time: number,
+  calmHullR: number,
 ): number {
   const hs = environment.waves.params.significantHeight;
-  if (hs < 0.05) return 0; // Calm water.
+  if (hs < 0.05 || calmHullR <= 0) return 0; // Calm water / stationary.
 
-  // Wave encounter angle: angle between wave direction (FROM) and boat heading.
-  // Head sea = waves coming from ahead = 0° relative.
+  // Heading weight: 1 beating into a head sea, 0 running with it.
   const waveDir = environment.waves.params.windDirection; // FROM direction
-  const encounterAngle = Math.abs(waveDir - heading);
-  // Cos of encounter: 1 in head sea, -1 in following sea.
-  const cosEncounter = Math.cos(encounterAngle);
+  const cosEncounter = Math.cos(waveDir - heading);
+  const headSeaFactor = clamp((1 + cosEncounter) * 0.5, 0, 1);
 
-  // Added resistance is greatest in a head sea and minimal running downwind.
-  // Simple empirical formula scaled by hull size.
-  const headSeaFactor = clamp((1 + cosEncounter) * 0.5, 0, 1); // 1 = head sea, 0 = following
+  // Hs² scaling normalised to a 1 m reference sea (so Hs 0.7 → 0.49).
+  const hsScale = hs * hs;
 
-  // Encounter frequency modulation: short steep waves at high speed are worse.
+  // A light dinghy rides over short chop: scale down for small LWL.
+  const sizeFactor = clamp(lwl / 12, 0.25, 1);
+
+  // Encounter-frequency bump: beating fast into short steep waves hurts a little
+  // more, running is easier. Bounded and gentle.
   const wavePeriod = environment.waves.params.swellPeriod || 6;
-  const waveFreq = (2 * Math.PI) / wavePeriod;
-  // Encounter freq = wave freq * (1 + speed * cos(encounter) / wave celerity)
-  const celerity = PHYSICS_CONSTANTS.GRAVITY / waveFreq; // Deep water approximation
-  const encounterMod = clamp(1 + (speed * cosEncounter) / Math.max(celerity, 1), 0.3, 3);
+  const celerity = (PHYSICS_CONSTANTS.GRAVITY * wavePeriod) / (2 * Math.PI);
+  const encounterMod = clamp(1 + (0.5 * speed * cosEncounter) / Math.max(celerity, 1), 0.5, 1.6);
 
-  // Scale by waterplane area (wider boats catch more wave energy).
-  const waterplaneScale = lwl * 0.3; // Rough beam estimate
-  const rawResistance = 0.5 * 1025 * waterplaneScale * hs * hs * headSeaFactor * encounterMod;
+  // Fraction of the calm resistance. ADDED_RESISTANCE_K calibrated so a Hs 0.7 m
+  // head sea adds ~15–25 % to the calm resistance for this dinghy (and a beam
+  // reach ~10 %, a run ~0), matching the cited order of magnitude.
+  const ADDED_RESISTANCE_K = 0.55;
+  const fraction = ADDED_RESISTANCE_K * hsScale * headSeaFactor * encounterMod * sizeFactor;
 
-  // Reduce for small boats that ride over waves rather than plowing through.
-  const sizeFactor = clamp(lwl / 12, 0.3, 1.5);
-  return rawResistance * sizeFactor;
+  // Hard cap: a seaway never more than ~35 % of the calm resistance for a dinghy.
+  const clampedFraction = clamp(fraction, 0, 0.35);
+  return calmHullR * clampedFraction;
 }

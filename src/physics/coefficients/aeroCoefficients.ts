@@ -197,16 +197,25 @@ export function foilLiftCoefficient(alpha: number, thickness: number): number {
 
   // Symmetric NACA-style section: lift slope ~2π reduced by thickness and viscosity.
   const liftSlope = 5.8 - thickness * 8; // Thicker sections are less efficient.
-  const stallAlpha = 0.22 - thickness * 0.3; // ~12° for a typical section.
+  // Stall angle for a moderate-aspect dinghy foil (daggerboard/rudder). Real
+  // NACA 00xx sections at these Reynolds numbers hold attached flow to ~14–16°
+  // before stalling, and a tapered high-aspect blade stalls gently. The previous
+  // 0.19 rad (~11°) was both low and sharp, which (a) let a brief leeway spike
+  // tip the daggerboard into collapse — part of the leeway-runaway — and (b)
+  // meant a tacking rudder commanded past ~11° LOST turning authority right when
+  // it was needed to punch the bow through the eye. Raised to ~15° and the
+  // post-stall decay widened below so the loss is gradual, not a cliff.
+  const stallAlpha = 0.26 - thickness * 0.3; // ~15° for a 10% section.
 
   if (absAlpha <= stallAlpha) {
     return liftSlope * alpha; // Sign-preserving linear region.
   }
 
-  // Post-stall: sharper than a sail because rigid sections don't deform to soften it.
+  // Post-stall: decays gradually (over ~0.25 rad, not 0.15) to ~60% of peak — a
+  // tapered dinghy blade sheds lift smoothly rather than dropping off a cliff.
   const peak = liftSlope * stallAlpha * Math.sign(alpha || 1);
-  const stallProgress = saturate((absAlpha - stallAlpha) / 0.15);
-  return peak * (1 - 0.5 * stallProgress);
+  const stallProgress = saturate((absAlpha - stallAlpha) / 0.25);
+  return peak * (1 - 0.4 * stallProgress);
 }
 
 /**
@@ -227,10 +236,10 @@ export function foilDragCoefficient(
   const inducedCd = (cl * cl) / (Math.PI * aspectRatio * DEFAULT_FOIL_EFFICIENCY_LOCAL);
 
   // Separation drag post-stall.
-  const stallAlpha = 0.22 - thickness * 0.3;
+  const stallAlpha = 0.26 - thickness * 0.3;
   let separationCd = 0;
   if (absAlpha > stallAlpha) {
-    const stallProgress = saturate((absAlpha - stallAlpha) / 0.15);
+    const stallProgress = saturate((absAlpha - stallAlpha) / 0.25);
     separationCd = 0.5 * stallProgress * stallProgress;
   }
 

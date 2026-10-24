@@ -39,17 +39,55 @@ const _worldPoint: Vec3 = vec3();
 export class BuoyancyForceGenerator implements ForceGenerator {
   readonly id = 'buoyancy';
 
+  /**
+   * Reference depth at which a point's buoyancy fraction reaches 1 (buoyancy =
+   * weight share). When provided (BoatFactory computes it per boat), it is the
+   * value that floats the hull at its DESIGN waterline: the volume-weighted mean
+   * submergence of the buoyancy points at the design waterline, i.e.
+   * `waterlineHeight − centreOfBuoyancy.y`. See the constructor doc.
+   */
+  private readonly _refDepth: number | undefined;
+
+  /**
+   * @param refDepth Optional per-boat reference depth (metres). Pass the value
+   *   that makes total buoyancy equal total weight at the DESIGN waterline —
+   *   `waterlineHeight − centreOfBuoyancy.y` — so the hull floats at its design
+   *   draft instead of settling ~0.2 m deeper. When omitted the legacy
+   *   `max(|CoB.y|·2, waterlineBeam·0.25, 0.1)` heuristic is used (deep-sink).
+   */
+  constructor(refDepth?: number) {
+    this._refDepth = refDepth !== undefined && refDepth > 1e-3 ? refDepth : undefined;
+  }
+
   evaluate(ctx: ForceContext, out: AppliedForce[]): void {
     const { state, boat, environment, time } = ctx;
     const points = boat.hydrostatics.buoyancyPoints;
     const waterDensity = ctx.waterDensity;
     const g = PHYSICS_CONSTANTS.GRAVITY;
 
-    // Reference depth: the depth at which a point's buoyancy equals its weight share.
-    // At equilibrium, submergence/refDepth ≈ 1 for each submerged point, so total
-    // buoyancy ≈ total weight. Using the CoB depth as proxy for half-draft.
+    // Reference depth: the submergence at which a point's buoyancy equals its
+    // weight share, so that summed over the hull at the design waterline total
+    // buoyancy = total weight and the hull floats at its DESIGN draft.
+    //
+    // DEEP-SINK FIX (was a documented known-limitation). The old heuristic
+    // `max(|CoB.y|·2, waterlineBeam·0.25, 0.1)` was dominated by the
+    // `waterlineBeam·0.25 ≈ 0.29 m` term — not a real draft — so equilibrium
+    // landed with the keel ~0.29 m below mean water instead of the ~0.12 m
+    // design draft (the hull rendered nearly awash; the render layer hid it with
+    // a `setHeaveOverride` hack). The correct linearisation point is the
+    // volume-weighted mean submergence of the buoyancy points AT the design
+    // waterline, which equals `waterlineHeight − centreOfBuoyancy.y`
+    // (≈0.059 m for the dinghy). BoatFactory computes that from the lofted hull
+    // and passes it in. With it, Σ ρg·V_i·(sub_i/refDepth) = ρg·displacedVolume
+    // ≈ mass·g exactly at the design waterline, so the hull floats at design
+    // draft BY CONSTRUCTION. A stiffer refDepth also stiffens the distributed
+    // buoyancy's roll couple; `RightingMoment` compensates (its form-GZ term is
+    // scaled so total static roll stiffness still equals the geometric GZ curve
+    // — the two no longer double-count). See RightingMoment.ts.
     const cobY = boat.hydrostatics.centreOfBuoyancy.y;
-    const refDepth = Math.max(Math.abs(cobY) * 2, boat.hydrostatics.waterlineBeam * 0.25, 0.1);
+    const refDepth =
+      this._refDepth ??
+      Math.max(Math.abs(cobY) * 2, boat.hydrostatics.waterlineBeam * 0.25, 0.1);
 
     // Weight per point: total weight distributed evenly
     // (uniform distribution is approximate — acceptable because the point volume

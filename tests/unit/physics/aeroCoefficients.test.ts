@@ -217,8 +217,14 @@ describe('foilLiftCoefficient', () => {
   });
 
   it('stalls at high alpha', () => {
-    const clPeak = foilLiftCoefficient(0.18, thickness);
-    const clStalled = foilLiftCoefficient(0.35, thickness);
+    // The foil stall angle was raised from ~11° to ~15° (0.26 − thickness·0.3 rad)
+    // and the post-stall decay widened, matching real NACA 00xx sections at these
+    // Reynolds numbers (attached to ~14–16°) — see aeroCoefficients.ts. So sample
+    // the PEAK at the stall angle (~0.23 rad for a 10% section) and the STALLED
+    // value well past it (0.5 rad): a stalled foil must still make less lift than
+    // at its peak.
+    const clPeak = foilLiftCoefficient(0.23, thickness);
+    const clStalled = foilLiftCoefficient(0.5, thickness);
     expect(Math.abs(clStalled)).toBeLessThan(Math.abs(clPeak));
   });
 

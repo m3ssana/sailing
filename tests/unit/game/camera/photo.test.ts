@@ -171,9 +171,13 @@ describe('camera settings', () => {
     }
   });
 
-  it('defaults to full horizon lock and normal head motion', () => {
+  it('defaults to a mostly-level horizon (lock 0.35, a UX choice) and normal head motion', () => {
     const s = defaultCameraSettings();
-    expect(s.horizonLock).toBe(1);
+    // horizonLock is the fraction of boat roll the camera follows (0 = level horizon, 1 = rolls
+    // fully with the boat; see settings.ts). The default was lowered 1 -> 0.35 after the first
+    // real-browser run (cramped, tilting view); the 0..1 mapping itself is covered by the
+    // controller tests, so this only pins the shipped default.
+    expect(s.horizonLock).toBe(0.35);
     expect(s.reducedRoll).toBe(false);
     expect(headMotionScale(s)).toBe(1);
   });

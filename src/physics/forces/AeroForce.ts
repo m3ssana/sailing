@@ -206,7 +206,7 @@ export class AeroForce implements ForceGenerator {
       const sideSign = Math.sign(awSide) || 1;
 
       // Sail trim angle from controls: how far the boom is eased from centreline.
-      const trimAngle = getSailTrim(sail, controls);
+      const trimAngle = getSailTrim(sail, controls, sideSign);
 
       // Angle of attack = apparent-wind incidence − boom angle. When the boom is
       // eased to roughly match the incidence the flow attaches at a small alpha
@@ -282,7 +282,17 @@ export class AeroForce implements ForceGenerator {
       sailState.heelingMoment = heelMoment;
 
       // --- Emit the force ---
-      // Application point is at the centre of effort (simplified to waterline + CoE height).
+      // Application point is at the centre of effort (simplified to waterline +
+      // CoE height). NOTE: this is a world-vertical offset, NOT the hull-rotated
+      // CoE. A heel-rotated CoE (arm ∝ cos(heel)) is more physically correct and
+      // would help the boat self-limit its heel close-hauled — BUT it was tried
+      // and REVERTED: at large heel / knock-down the rotated application point
+      // creates a destabilising torque feedback that diverged the 35 kt / 3 m
+      // WaveDrag soak to ~1e97 (it broke the bounded-soak invariant that a
+      // narrower test does not cover — the same class of "plausible fix breaks a
+      // different invariant" this project's history warns about). Kept world-
+      // vertical; the roll-fragility close-hauled above ~12 kt is handled as a
+      // documented controller/integrator limit instead (see STATUS).
       set3(_pointVec, state.position.x, state.position.y + coeHeight, state.position.z);
 
       out.push({
@@ -300,6 +310,7 @@ export class AeroForce implements ForceGenerator {
 function getSailTrim(
   sail: SailSpec,
   controls: { mainsheet: number; jibsheet: number; spinnaker: number; traveller: number },
+  sideSign: number,
 ): number {
   let sheetPosition: number;
   switch (sail.kind) {
@@ -320,11 +331,25 @@ function getSailTrim(
 
   // Sheet at 0 = fully eased (maxSheetAngle from centreline).
   // Sheet at 1 = fully trimmed (close to centreline).
-  // Traveller shifts the base angle for the main.
+  // Traveller shifts the boom angle for the main. `baseAngle` here is the boom
+  // angle MAGNITUDE from the centreline (always ≥ 0); the tack (which side the
+  // boom is on) is carried separately by `sideSign` (+1 = boom to port / wind
+  // over starboard, −1 = boom to starboard). The traveller must therefore be
+  // applied RELATIVE TO THE TACK, not as a fixed add to the magnitude — else
+  // the model is not port/starboard mirror-symmetric: a given traveller value
+  // would widen the boom on one tack and narrow it on the mirror tack.
+  //
+  // Convention: `traveller` +1 = car to starboard, −1 = car to port. Moving the
+  // car to WINDWARD (the side the wind comes from = the side opposite the boom =
+  // −sideSign) pulls the boom toward the centreline → SMALLER boom magnitude;
+  // to leeward → larger. So the magnitude change is −(sideSign · traveller)·k.
+  // Under the mirror (sideSign→−sideSign, traveller→−traveller) this product is
+  // invariant, so the boom magnitude — and therefore the whole sail force — is
+  // exactly mirror-symmetric. Regression: AeroForce traveller mirror test.
   let baseAngle = sail.maxSheetAngle * (1 - sheetPosition);
   if (sail.kind === 'main') {
-    // Traveller: -1 to port, +1 to starboard. Shifts the boom angle.
-    baseAngle += controls.traveller * 0.1; // ~6° of traveller range
+    const travellerSign = sideSign >= 0 ? 1 : -1;
+    baseAngle -= travellerSign * controls.traveller * 0.1; // ~6° of traveller range
   }
 
   return clamp(baseAngle, 0, sail.maxSheetAngle);

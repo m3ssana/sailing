@@ -51,6 +51,24 @@
  */
 
 import type { AppliedForce, ForceContext, ForceGenerator, Vec3 } from '@/types';
+import { vec3, rotateVec3, rotateVec3Inverse, addScaled3 } from '@core/math';
+import { pushBodyAxisTorque } from './torqueCouple';
+
+/** Body forward axis (bow) in hull-local coords: −Z. */
+const FWD_BODY: Vec3 = { x: 0, y: 0, z: -1 };
+/** Body starboard axis in hull-local coords: +X. */
+const STARBOARD_BODY: Vec3 = { x: 1, y: 0, z: 0 };
+
+/*
+ * Frame (rotation-invariant) — FIXED.
+ * The roll/pitch/yaw damping couples below oppose the BODY-frame angular
+ * velocity (ω_body = q⁻¹·ω_world) about the hull's own axes and are injected via
+ * `pushBodyAxisTorque`, which rotates the body torque into world space through
+ * the orientation quaternion. This is correct at every compass heading.
+ * (Historical bug: the couples were injected about fixed WORLD axes and damped
+ * the WORLD components of ω, correct only pointing due north/south — a
+ * heading-dependent mis-damping. See tests/unit/physics/rotationInvariance.test.ts.)
+ */
 
 /** Per-axis damping coefficients (N·m per rad/s, and per (rad/s)²; N per m/s). */
 export interface HydrodynamicDampingConfig {
@@ -68,9 +86,16 @@ export interface HydrodynamicDampingConfig {
   yawQuad: number;
   /** Linear heave damping (vertical linear velocity), N per m/s. */
   heaveLinear: number;
-  /** Linear surge/sway damping (horizontal linear velocity), N per m/s. Small —
-   *  enough to settle/stabilise, not so much it kills sailing speed. */
+  /** Linear SURGE (fore-aft, along the bow) damping, N per m/s. Small — the
+   *  streamlined hull has little fore-aft damping and HydroResistance already
+   *  supplies the through-water drag; kept light so it does not eat speed. */
   surgeLinear: number;
+  /** Linear SWAY (athwartships, lateral) damping, N per m/s. LARGE — a hull +
+   *  daggerboard moving sideways is a flat plate edge-on with huge added mass
+   *  and broadside drag, so lateral motion is strongly damped. This critically
+   *  damps the leeway (sway) mode and is the fix for the wave-triggered leeway
+   *  runaway. Defaults to `surgeLinear` when omitted (legacy behaviour). */
+  swayLinear?: number;
 }
 
 /**
@@ -83,55 +108,85 @@ export class HydrodynamicDampingForceGenerator implements ForceGenerator {
 
   private readonly _cfg: HydrodynamicDampingConfig;
 
+  // Per-INSTANCE scratch (no shared module state → deterministic in parallel runs).
+  private readonly _omegaBody: Vec3 = vec3();
+  private readonly _torqueBody: Vec3 = vec3();
+  private readonly _worldCoM: Vec3 = vec3();
+  private readonly _fwd: Vec3 = vec3();
+  private readonly _stbd: Vec3 = vec3();
+
   constructor(cfg: HydrodynamicDampingConfig) {
     this._cfg = cfg;
   }
 
   evaluate(ctx: ForceContext, out: AppliedForce[]): void {
-    const w: Vec3 = ctx.state.angularVelocity;
     const p = ctx.state.position;
     const c = this._cfg;
+    const orientation = ctx.state.orientation;
+    const _omegaBody = this._omegaBody;
+    const _torqueBody = this._torqueBody;
+    const _worldCoM = this._worldCoM;
+    const _fwd = this._fwd;
+    const _stbd = this._stbd;
 
-    // Damping moment per axis: −(lin·ω + quad·|ω|·ω). All OPPOSE the rotation.
-    const mx = -(c.rollLinear * w.x + c.rollQuad * Math.abs(w.x) * w.x); // roll (about X)
-    const my = -(c.yawLinear * w.y + c.yawQuad * Math.abs(w.y) * w.y); // yaw (about Y)
-    const mz = -(c.pitchLinear * w.z + c.pitchQuad * Math.abs(w.z) * w.z); // pitch (about Z)
+    // Angular velocity in the BODY frame (ω_body = q⁻¹ · ω_world). Body axes:
+    // forward = −Z (roll), starboard = +X (pitch), up = +Y (yaw).
+    rotateVec3Inverse(orientation, ctx.state.angularVelocity, _omegaBody);
+    const wRoll = _omegaBody.z; // about body Z (longitudinal)
+    const wPitch = _omegaBody.x; // about body X (transverse)
+    const wYaw = _omegaBody.y; // about body Y (vertical)
 
-    // Inject each moment as a force couple about its axis with a 1 m lever.
-    // The couple is chosen so the NET torque equals the target moment on that
-    // axis. (These signs are verified by the net-torque unit test — an earlier
-    // interim version had the YAW couple inverted, turning yaw damping into
-    // ANTI-damping and driving a divergence to |ω_y|≈105 rad/s in ~1.2 s.)
+    // Damping torque per BODY axis: −(lin·ω + quad·|ω|·ω). All OPPOSE the
+    // rotation. The signs are automatically correct because the torque opposes
+    // the body-frame angular velocity and is injected via `pushBodyAxisTorque`.
+    const tPitch = -(c.pitchLinear * wPitch + c.pitchQuad * Math.abs(wPitch) * wPitch);
+    const tYaw = -(c.yawLinear * wYaw + c.yawQuad * Math.abs(wYaw) * wYaw);
+    const tRoll = -(c.rollLinear * wRoll + c.rollQuad * Math.abs(wRoll) * wRoll);
 
-    // Roll (about X): vertical forces offset in ±Z.
-    //   τ_x = Σ r×F = (+0.5·ẑ)×(−mx·ŷ) + (−0.5·ẑ)×(+mx·ŷ) = +mx x̂.
-    if (Math.abs(mx) > 1e-6) {
-      out.push({ force: { x: 0, y: -mx, z: 0 }, point: { x: p.x, y: p.y, z: p.z + 0.5 } });
-      out.push({ force: { x: 0, y: mx, z: 0 }, point: { x: p.x, y: p.y, z: p.z - 0.5 } });
+    // Assemble the body torque (x=pitch about body X, y=yaw about Y, z=roll about Z).
+    _torqueBody.x = tPitch;
+    _torqueBody.y = tYaw;
+    _torqueBody.z = tRoll;
+
+    if (Math.abs(tPitch) > 1e-6 || Math.abs(tYaw) > 1e-6 || Math.abs(tRoll) > 1e-6) {
+      // World-space centre of mass for the couple.
+      rotateVec3(orientation, ctx.boat.centreOfMass, _worldCoM);
+      addScaled3(_worldCoM, p, 1);
+      pushBodyAxisTorque(_torqueBody, orientation, _worldCoM, out);
     }
-    // Pitch (about Z): vertical forces offset in ±X.
-    //   τ_z = (+0.5·x̂)×(+mz·ŷ) + (−0.5·x̂)×(−mz·ŷ) = +mz ẑ.
-    if (Math.abs(mz) > 1e-6) {
-      out.push({ force: { x: 0, y: mz, z: 0 }, point: { x: p.x + 0.5, y: p.y, z: p.z } });
-      out.push({ force: { x: 0, y: -mz, z: 0 }, point: { x: p.x - 0.5, y: p.y, z: p.z } });
-    }
-    // Yaw (about Y): horizontal (Z-directed) forces offset in ±X.
-    //   τ_y = (+0.5·x̂)×(−my·ẑ) + (−0.5·x̂)×(+my·ẑ) = +my ŷ.
-    //   (x̂×ẑ = −ŷ, so a +Z force at +X gives −Y torque; hence −my on the +X arm.)
-    if (Math.abs(my) > 1e-6) {
-      out.push({ force: { x: 0, y: 0, z: -my }, point: { x: p.x + 0.5, y: p.y, z: p.z } });
-      out.push({ force: { x: 0, y: 0, z: my }, point: { x: p.x - 0.5, y: p.y, z: p.z } });
-    }
 
-    // Linear hydrodynamic damping on the hull's translational velocity. The hull
-    // dragging through the water damps surge/sway/heave; without it (e.g. with
-    // WaveDrag disabled) the conservative buoyancy↔weight restoring sets up an
-    // essentially UNDAMPED heave oscillation that never settles. Heave (y) is
-    // damped hardest (vertical hull motion sweeps the most water).
+    // Linear hydrodynamic damping on the hull's translational velocity,
+    // decomposed in the BODY frame so SWAY (lateral) can be damped far harder
+    // than SURGE (fore-aft) — which is the real hydrodynamics AND the fix for
+    // the leeway runaway. A hull + daggerboard sweeping SIDEWAYS through the
+    // water has a very large added mass and broadside drag (it is essentially a
+    // flat plate edge-on to the sideways flow), so lateral motion is strongly
+    // damped; fore-aft motion is streamlined and lightly damped. The old model
+    // lumped both into one small `surgeLinear` (=12) applied to world x AND z,
+    // leaving SWAY almost undamped. With a stiff foil that was the direct cause
+    // of the wave-triggered LEEWAY RUNAWAY: a small wave-induced leeway spike
+    // produced a large foil side force, accelerating the hull sideways with
+    // almost no damping, overshooting into foil stall, from which the leeway/
+    // speed loop never recovered (speed collapsed to ~1 kt at 50°+ leeway — the
+    // real-game defect). Damping sway hard critically damps that sway mode so
+    // the hull settles at its small (~2–4°) equilibrium leeway and holds it
+    // through chop, WITHOUT eating forward speed (surge stays light at 12).
+    // Heave (y, vertical) is damped by `heaveLinear`. Rotation-invariant: the
+    // body-frame decomposition uses the orientation quaternion.
     const v = ctx.state.linearVelocity;
-    const fx = -c.surgeLinear * v.x;
+    // Body horizontal axes in world space (forward = −Z_body, starboard = +X_body).
+    rotateVec3(orientation, FWD_BODY, _fwd);
+    rotateVec3(orientation, STARBOARD_BODY, _stbd);
+    // Project horizontal velocity onto forward/starboard (ignore their tiny y
+    // tilt when heeled — the heave term owns vertical; this keeps the damping a
+    // pure horizontal surge/sway split).
+    const vSurge = v.x * _fwd.x + v.z * _fwd.z; // along the bow
+    const vSway = v.x * _stbd.x + v.z * _stbd.z; // athwartships
+    const fSurge = -c.surgeLinear * vSurge;
+    const fSway = -(c.swayLinear ?? c.surgeLinear) * vSway;
+    const fx = fSurge * _fwd.x + fSway * _stbd.x;
     const fy = -c.heaveLinear * v.y;
-    const fz = -c.surgeLinear * v.z;
+    const fz = fSurge * _fwd.z + fSway * _stbd.z;
     if (Math.abs(fx) > 1e-6 || Math.abs(fy) > 1e-6 || Math.abs(fz) > 1e-6) {
       out.push({ force: { x: fx, y: fy, z: fz }, point: { x: p.x, y: p.y, z: p.z } });
     }
@@ -141,33 +196,46 @@ export class HydrodynamicDampingForceGenerator implements ForceGenerator {
 /**
  * Default hydrodynamic damping for a small single-handed dinghy (ILCA-scale).
  *
- * Roll is damped hardest: the daggerboard (~0.8 m span) and topsides sweep a
- * large area broadside as the boat rolls. Calibrated so a release from ~15° heel
- * settles in ~3 s (slightly overdamped, matching a Laser) and a steady heeling
- * moment reaches a stable angle; verified to keep a full 200 s soak at 30–40 kt
- * in 1.5–5 m waves bounded and NaN-free with WaveDrag disabled.
+ * Roll is damped near its critical value: the daggerboard (~0.8 m span) and
+ * topsides sweep a large area broadside as the boat rolls. Calibrated jointly
+ * with the DESIGN-DRAFT buoyancy fix (see Buoyancy.ts): once the hull floats at
+ * its design draft the roll restoring is physically correct (GM ≈ 1.4 m, roll
+ * inertia incl. added mass ≈ 195 kg·m² → critical roll damping
+ * 2·√(I·k) ≈ 1200 N·m·s/rad). The previous value (5000) was ~4× critical — an
+ * empirical crutch from the DEEP-SINK era that, with the hull now floating
+ * correctly, over-damped roll so hard the 25 kt cleated-no-hike knockdown could
+ * no longer complete within 20 s (it settled ~31°). Set to ~1.7× critical:
+ * enough that a dinghy's roll is strongly (not critically) damped and does not
+ * ring, but a sustained overpowering gust still rolls it past the capsize angle
+ * in a few seconds (25 kt cleated → capsize ~2–3 s) while a full-hike eased
+ * sheet holds 12 kt flat. Verified against the capsize-contrast + 200 s soaks.
+ * (Larsson, "Principles of Yacht Design": roll damping of a shallow beamy hull
+ * with an immersed foil is large but not many multiples of critical.)
  */
 export const DINGHY_HYDRO_DAMPING: HydrodynamicDampingConfig = {
-  // Roll is damped hardest: the daggerboard (0.78 m span) and the hull topsides
-  // sweep a large area broadside as the boat rolls, and a dinghy's roll is in
-  // reality strongly (near-critically) damped — it does not ring. Sized so a
-  // release from heel settles in ~2–3 s and the boat resists a transient
-  // knockdown long enough for the crew to hike, without being so stiff it feels
-  // locked. (Larsson, "Principles of Yacht Design": roll damping of a shallow
-  // beamy hull with an immersed foil is large.)
-  rollLinear: 5000,
-  rollQuad: 2500,
+  rollLinear: 2000,
+  rollQuad: 1000,
   pitchLinear: 450,
   pitchQuad: 250,
   yawLinear: 220,
   yawQuad: 120,
   heaveLinear: 300,
-  // Surge/sway: deliberately SMALL. HydroResistance (friction + residuary +
-  // induced) and WaveDrag already supply the real translational drag along the
-  // direction of travel; this term exists only so a passive, un-forced hull
-  // settles its sway/surge drift rather than coasting forever. A large value
-  // (an earlier interim crutch used 120) silently ate ~350 N at 5 kt and
-  // prevented the boat from ever building sailing speed — the "it crabs and
-  // never goes" symptom. Kept light enough to be negligible against drive.
+  // SURGE (fore-aft): deliberately SMALL. HydroResistance (friction + residuary
+  // + induced) and WaveDrag already supply the real through-water drag along
+  // the bow; this term exists only so a passive, un-forced hull settles its
+  // fore-aft drift rather than coasting forever. Kept light so it does not eat
+  // sailing speed (a large value — an earlier crutch used 120 — silently ate
+  // ~350 N at 5 kt, the "it crabs and never goes" symptom).
   surgeLinear: 12,
+  // SWAY (athwartships): LARGE. A hull + daggerboard moving sideways is a flat
+  // plate edge-on with huge added mass and broadside drag, so lateral motion is
+  // strongly damped in reality. This critically damps the leeway (sway) mode:
+  // without it the stiff foil + near-zero sway damping made the leeway/speed
+  // loop violently underdamped, so a wave-induced leeway spike overshot into
+  // foil stall and the boat crabbed off at 50°+ leeway / ~1 kt (the real-game
+  // defect). Sized to roughly critically damp the sway mode (foil side-force
+  // "stiffness" ~ a few hundred N/° at sailing speed on ~133 kg) so the hull
+  // holds its small (~2–4°) equilibrium leeway through chop. It opposes ONLY
+  // lateral motion, so it does NOT touch forward speed.
+  swayLinear: 600,
 };

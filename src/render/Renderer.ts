@@ -25,21 +25,26 @@ export interface RendererHandle {
  * @param canvas — the canvas element to render into.
  * @param onDeviceLost — optional callback invoked when the GPU device is lost.
  *   If not provided, the default handler logs a warning and attempts recovery.
+ * @param forceWebGL — when true, forces the WebGL2 backend regardless of WebGPU
+ *   availability (used by `?backend=webgl` for the smoke harness and by users on
+ *   a backend that misbehaves).
  * @returns the renderer and probed capabilities, or throws if neither backend
  *   can initialize.
  */
 export async function createRenderer(
   canvas: HTMLCanvasElement,
   onDeviceLost?: () => void,
+  forceWebGL = false,
 ): Promise<RendererHandle> {
   // Probe WebGPU availability via the navigator.gpu sentinel.
   // On Firefox/Safari this is absent, which triggers the WebGL2 fallback.
-  const webgpuAvailable = typeof navigator !== 'undefined' && 'gpu' in navigator;
+  const webgpuAvailable =
+    !forceWebGL && typeof navigator !== 'undefined' && 'gpu' in navigator;
 
   const renderer = new THREE.WebGPURenderer({
     canvas,
     antialias: false, // TAA handles anti-aliasing; MSAA is expensive on the ocean grid.
-    forceWebGL: !webgpuAvailable,
+    forceWebGL: forceWebGL || !webgpuAvailable,
   });
 
   // This MUST be awaited — the backend won't be ready until the promise resolves.

@@ -41,6 +41,7 @@ import { StationLofter } from '@generation/hull/StationLofter';
 import { RigBuilder } from '@generation/rig/RigBuilder';
 import { SailSurfaceGenerator } from '@generation/sail/SailSurfaceGenerator';
 import { buildProceduralMaterial } from '@render/materials/index';
+import { buildSailSurfaceMaterial } from './sailSurfaceMaterial';
 import { toBufferGeometry } from './toBufferGeometry';
 import {
   interpolateBoatState,
@@ -79,6 +80,24 @@ function buildMaterialWithColor(
     ? { ...params, baseColor: colorOverride }
     : params;
   return buildProceduralMaterial(effectiveParams);
+}
+
+/**
+ * Choose the hull colour that reads best against the sea. If the primary
+ * `hullColor` is very light (near-white, luma ≳ 0.8 — a gelcoat that disappears
+ * against a pale overcast sea), prefer the (usually more saturated/darker)
+ * `deckColor` so the boat is a clearly visible coloured hull. Otherwise keep the
+ * hull colour. Pure; both inputs come from the boat's own `appearance`.
+ */
+export function pickVisibleHullColor(hullColor: RGB, deckColor: RGB): RGB {
+  const luma = (c: RGB): number => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+  const hullLuma = luma(hullColor);
+  const deckLuma = luma(deckColor);
+  // Near-white hull and a meaningfully darker deck → use the deck colour.
+  if (hullLuma > 0.8 && deckLuma < hullLuma - 0.2) {
+    return deckColor;
+  }
+  return hullColor;
 }
 
 // ─── BoatView ────────────────────────────────────────────────────────────────
@@ -141,10 +160,18 @@ export class BoatView {
 
     // ── Generate hull geometry ─────────────────────────────────────────────
     const hullModel: GeneratedModel = StationLofter.generate(boatDef.hull, seed);
-    this.hullMaterial = buildMaterialWithColor(
-      boatDef.materials.hull,
+    // The lofter emits a single hull+deck group, so one colour covers the whole
+    // topside. We use the boat's DISTINCTIVE appearance colour — `deckColor`
+    // when it is more saturated/darker than the (often near-white) `hullColor` —
+    // so the boat reads as a coloured hull against a pale overcast sea instead
+    // of vanishing into it (a near-white gelcoat on near-white water is
+    // invisible, the defect seen in the first run). A separate deck sub-mesh is
+    // a known generation-layer limitation (see class comment).
+    const hullColor = pickVisibleHullColor(
       boatDef.appearance.hullColor,
+      boatDef.appearance.deckColor,
     );
+    this.hullMaterial = buildMaterialWithColor(boatDef.materials.hull, hullColor);
     this.buildMeshesFromModel(hullModel, this.hullMaterial, this.hullGroup);
 
     // ── Generate rig geometry ──────────────────────────────────────────────
@@ -156,7 +183,13 @@ export class BoatView {
     this.sailMaterials = [];
     for (const sailDef of boatDef.sails) {
       const sailModel: GeneratedModel = SailSurfaceGenerator.generate(sailDef.surface, seed);
-      const sailMat = buildProceduralMaterial(boatDef.materials.sail);
+      // Two-sided cream sailcloth with panel seam lines (not the flat grey
+      // single-sided placeholder, which showed its unlit back face to the chase
+      // camera). Camber + twist come from the baked sail geometry.
+      const sailMat = buildSailSurfaceMaterial({
+        baseColor: boatDef.materials.sail.baseColor,
+        panelCount: sailDef.surface.panelCount,
+      });
       this.sailMaterials.push(sailMat);
       this.buildMeshesFromModel(sailModel, sailMat, this.sailGroup);
     }
@@ -214,7 +247,11 @@ export class BoatView {
     if (this.prevState !== undefined && this.currState !== undefined) {
       const interp = interpolateBoatState(this.prevState, this.currState, alpha);
 
-      this.root.position.set(interp.position.x, interp.position.y, interp.position.z);
+      this.root.position.set(
+        interp.position.x,
+        interp.position.y,
+        interp.position.z,
+      );
 
       // Apply visual heel amplification (§6.1): add 15% extra heel roll
       // The heel is around the Z axis (roll in hull-local frame). We apply it

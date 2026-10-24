@@ -40,6 +40,39 @@ silent sign flip at the boundary, it is preserved and documented at every point 
 `+X` is east and `+Z` is **south**, so a compass bearing θ maps to `(sin θ, 0, -cos θ)`. Venue-local
 coordinates have their origin at the venue centre.
 
+### Body axes and the heading quaternion (the ONE orientation convention)
+
+The boat's **body axes** are: forward = `-Z_body`, starboard = `+X_body`, up = `+Y_body`. These form a
+right-handed frame (`starboard = forward × up`, i.e. `(0,0,-1) × (0,1,0) = (1,0,0)`).
+
+A compass bearing increases **clockwise** seen from above, but a rotation by `+θ` about `+Y` (right-handed,
+Y up) turns a horizontal vector **counter-clockwise** seen from above. Therefore the orientation of a boat
+at heading `h` (bearing) is a rotation about `+Y` by **`-h`**, built by `quatFromHeading(h)` in
+`src/core/math`. With it, `rotateVec3(quatFromHeading(h), (0,0,-1)) === (sin h, 0, -cos h)` to machine
+precision — the quaternion's forward axis equals the **physical forward** the force generators and the
+boat's velocity use, so the engine has a **single** frame rather than two opposite-handed ones.
+
+Helpers (all in `src/core/math/quat.ts`, all tested for exact round-trip):
+
+- `quatFromHeading(h)` — orientation for bearing `h` (rotation about `+Y` by `-h`).
+- `headingFromQuat(q) = atan2(f.x, -f.z)` with `f = rotateVec3(q, (0,0,-1))` — the inverse.
+- `heelFromQuat(q)` — roll about the body **forward** axis, positive to **starboard** (starboard side down).
+- `pitchFromQuat(q)` — about the body **starboard** axis, positive **bow-up**.
+- `fromYawPitchRoll(yaw, pitch, roll)` — `qYaw(-yaw) · qPitch(+X) · qRoll(-Z)`; `fromYawPitchRoll(h,0,0) === quatFromHeading(h)`.
+- `forwardFromQuat` / `starboardFromQuat` / `upFromQuat` — derive the body axes in world space; the ONLY
+  sanctioned way for a force generator or the camera to build body axes (never re-synthesise `(sin h, …)`).
+
+**Inertia-axis mapping** (`BoatSpec.inertia`, a diagonal in body axes; shared by `BoatFactory` and the
+integrator): `.x` = **pitch** (about body X), `.y` = **yaw** (about Y), `.z` = **roll** (about Z).
+
+**Rudder sign** (verified against the sim): `+rudder` (to starboard) **raises** the heading bearing
+(turns the bow clockwise); `+ω_y` **lowers** it. A heading-hold PD helm is therefore
+`rudder = -(heading − target)·Kp + ω_y·Kd`.
+
+RightingMoment and HydrodynamicDamping build their roll/pitch/yaw couples in the **body** frame and inject
+them via `pushBodyAxisTorque` (rotated through the orientation), so stability is independent of the compass
+heading — proven by `tests/unit/physics/rotationInvariance.test.ts`.
+
 ---
 
 ## The contracts and why they are shaped this way

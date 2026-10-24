@@ -258,17 +258,32 @@ export const DINGHY: BoatDefinition = {
   // knock-down-to-capsize angle for an unballasted dinghy.
   capsizeAngle: (65 * Math.PI) / 180, // rad.
 
-  // Residuary resistance vs Froude number. A light planing dinghy has a modest
-  // displacement hump near Fn 0.35–0.4 and then the hull lifts and planes, so Cr
-  // falls back. Values are dimensionless coefficients applied to dynamic pressure
-  // on the wetted surface (matching HydroResistance.ts / PolarSolver.ts usage).
+  // Residuary (wavemaking) resistance, expressed in the Froude/Delft convention
+  // as the dimensionless ratio R_r / (ρ·g·∇) against Froude number — i.e. the
+  // residuary drag as a fraction of the boat's displacement WEIGHT (Larsson &
+  // Eliasson, "Principles of Yacht Design", Delft Systematic Yacht Series). This
+  // is how HydroResistance.ts and PolarSolver.ts consume it: R_r = C_r·ρ·g·∇.
+  //
+  // Calibrated so total hull resistance (ITTC-57 friction on the lofted wetted
+  // surface + this residuary) matches the measured order of magnitude for an
+  // Olympic Laser hull: ~40–70 N at 5 kt (Fn≈0.41), climbing through the
+  // displacement "hump" toward hull speed. The ratio stays a few percent up to
+  // the hump then rises steeply — the wall a displacement dinghy must climb
+  // before it planes — which is what makes the computed beam-reach polar land in
+  // the real-world 5–7 kt band at 12 kt TWS instead of running away. The old
+  // values (≤0.02, interpreted via 0.5·ρ·S·V²·C_r) produced ~190 N of phantom
+  // wavemaking drag at 5 kt and stalled the boat at ~2.5 kt.
   residuaryCurve: [
     { x: 0.0, y: 0.0 },
-    { x: 0.2, y: 0.002 },
-    { x: 0.35, y: 0.012 }, // displacement hump
-    { x: 0.5, y: 0.02 },
-    { x: 0.7, y: 0.018 }, // planing — resistance coefficient eases
-    { x: 1.0, y: 0.015 },
+    { x: 0.2, y: 0.004 },
+    { x: 0.3, y: 0.011 },
+    { x: 0.35, y: 0.018 }, // displacement hump begins
+    { x: 0.4, y: 0.03 },
+    { x: 0.45, y: 0.06 },
+    { x: 0.5, y: 0.12 }, // hull-speed wall (Fn 0.5)
+    { x: 0.6, y: 0.26 },
+    { x: 0.8, y: 0.55 },
+    { x: 1.0, y: 0.85 },
   ],
 
   materials: {

@@ -14,12 +14,28 @@
  * righting moment on the curve, the boat inverts. Recovery requires the heeling
  * moment to drop (sails in the water produce no drive) and, for dinghies, crew
  * action (stepping on the board).
+ *
+ * ## Frame (rotation-invariant) — FIXED
+ *
+ * The righting couple is a ROLL moment about the hull's longitudinal axis, so it
+ * is built in the BODY frame (torque about +Z_body, which per the canonical
+ * convention reduces heel) and injected via `pushBodyAxisTorque`, which rotates
+ * it through the orientation quaternion into world space. This is correct at
+ * every compass heading. (Historical bug: the couple was injected about a fixed
+ * WORLD axis, so stability depended on the absolute heading — the direct cause
+ * of the real-game Newport heading-dependent capsize. See
+ * `tests/unit/physics/rotationInvariance.test.ts`, now asserting invariance.)
  */
 
 import type { AppliedForce, ForceContext, ForceGenerator } from '@/types';
 import type { Vec3 } from '@/types/units';
 import { PHYSICS_CONSTANTS } from '@/types/units';
-import { sampleCurve } from '@core/math';
+import { sampleCurve, vec3, rotateVec3, addScaled3 } from '@core/math';
+import { pushBodyAxisTorque } from './torqueCouple';
+
+// Scratch for the world-space centre of mass and the body-frame torque.
+const _worldCoM: Vec3 = vec3();
+const _torqueBody: Vec3 = vec3();
 
 export class RightingMoment implements ForceGenerator {
   readonly id = 'righting-moment';
@@ -32,9 +48,13 @@ export class RightingMoment implements ForceGenerator {
 
   evaluate(ctx: ForceContext, out: AppliedForce[]): void {
     const { state, boat } = ctx;
-    const { heel, position, controls } = state;
+    const { heel, controls } = state;
 
     const absHeel = Math.abs(heel);
+
+    // World-space centre of mass (the couple is injected about it).
+    rotateVec3(state.orientation, boat.centreOfMass, _worldCoM);
+    addScaled3(_worldCoM, state.position, 1);
 
     // --- Capsize detection ---
     if (absHeel >= boat.capsizeAngle && !this.capsized) {
@@ -54,11 +74,15 @@ export class RightingMoment implements ForceGenerator {
         this.recoveryProgress = 0;
       }
 
-      // During capsize, apply a damped restoring force toward 90° (lying on side).
-      // This prevents the boat from going fully inverted (turtling) too quickly.
+      // During capsize, apply a damped restoring ROLL toward 90° (lying on side)
+      // in the body frame. This prevents the boat from going fully inverted
+      // (turtling) too quickly. Positive τ_z about +Z_body reduces heel.
       const targetHeel = Math.PI * 0.5 * Math.sign(heel);
-      const restoringMoment = (targetHeel - heel) * boat.mass * 2;
-      applyRightingForce(restoringMoment, heel, position, out);
+      const restoringMoment = (heel - targetHeel) * boat.mass * 2;
+      _torqueBody.x = 0;
+      _torqueBody.y = 0;
+      _torqueBody.z = restoringMoment;
+      pushBodyAxisTorque(_torqueBody, state.orientation, _worldCoM, out);
       return;
     }
 
@@ -68,70 +92,38 @@ export class RightingMoment implements ForceGenerator {
     const gz = sampleCurve(boat.hydrostatics.rightingCurve, absHeel);
     const formRighting = boat.hydrostatics.displacement * PHYSICS_CONSTANTS.GRAVITY * gz;
 
-    // --- Ballast contribution ---
-    // Ballast below CoB acts as a pendulum: moment = mass * g * arm * sin(heel).
-    // The arm is the vertical distance from CoM to CoB (captured in the righting curve
-    // for keelboats, but we add it explicitly for clarity and for cases where the
-    // righting curve doesn't include it fully).
-    // For keelboats this is already in the curve; for dinghies ballastMass is 0.
-    // Skip explicit ballast to avoid double-counting with the curve.
-
     // --- Crew weight as movable mass ---
-    // crewLateral: -1 (port) .. 1 (starboard)
-    // hike: 0 (sitting in) .. 1 (fully extended)
+    // crewLateral: -1 (port) .. 1 (starboard); hike: 0 .. 1.
     // The player and AI both write to these controls; the physics doesn't care who.
     const crewLateral = controls.crewLateral;
     const hikeEffort = controls.hike;
 
-    // Crew arm = how far the crew mass is from centreline.
-    // At max hike, crew is at the gunwale + extended (crewMovementRange.x gives half-beam).
+    // Crew arm = how far the crew mass is from centreline. At max hike, crew is
+    // at the gunwale + extended (crewMovementRange.x gives half-beam).
     const maxArm = boat.crewMovementRange.x;
     const crewArm = crewLateral * maxArm * (0.4 + 0.6 * hikeEffort);
 
-    // Crew righting moment: mass * g * arm * cos(heel)
-    // cos(heel) because as the boat heels, the effective arm shortens.
+    // Crew righting moment: mass * g * arm * cos(heel). cos(heel) because the
+    // effective arm shortens as the boat heels. Positive when crew is to
+    // windward (opposing heel).
     const crewRighting =
       boat.crewMass * boat.crewMovementRange.x > 0
         ? boat.crewMass * PHYSICS_CONSTANTS.GRAVITY * crewArm * Math.cos(heel)
         : 0;
 
-    // --- Total righting ---
-    // Form righting always opposes heel (restore to upright).
-    // Crew righting is positive when crew is to windward (opposing heel).
+    // --- Total restoring ROLL torque, in the body frame ---
+    // Form righting always opposes heel (restore to upright): a positive heel
+    // needs a positive τ_z (about +Z_body reduces heel), hence `* sign(heel)`.
+    // Crew righting is already signed (positive = windward = restoring), and
+    // enters with a sign chosen so that crew to WINDWARD reduces heel: a boat
+    // heeled to starboard (heel > 0) is restored by crew to PORT (crewLateral
+    // < 0 → crewRighting < 0), which must ADD a positive τ_z → so −crewRighting.
     const heelSign = Math.sign(heel) || 1;
-    const totalRighting = formRighting * heelSign + crewRighting;
+    const torqueZ = formRighting * heelSign - crewRighting;
 
-    // The righting moment acts as a torque about the longitudinal axis.
-    // We model it as a force couple: one force up on the windward side,
-    // one force down on the leeward side, separated by some arm.
-    applyRightingForce(-totalRighting, heel, position, out);
+    _torqueBody.x = 0;
+    _torqueBody.y = 0;
+    _torqueBody.z = torqueZ;
+    pushBodyAxisTorque(_torqueBody, state.orientation, _worldCoM, out);
   }
-}
-
-/**
- * Apply a righting moment as a vertical force couple separated by 1m arm.
- * Negative moment = opposes positive heel.
- */
-function applyRightingForce(
-  moment: number,
-  _heel: number,
-  position: Vec3,
-  out: AppliedForce[],
-): void {
-  if (Math.abs(moment) < 0.01) return;
-
-  // Model as a vertical force applied at a lateral offset.
-  // Moment = F * arm. We use arm = 1m for simplicity; F = moment / 1m.
-  const force = moment; // N, applied at 1m offset
-
-  // Apply upward on one side, downward on the other.
-  // Force perpendicular to heel (vertical) to create roll torque.
-  out.push({
-    force: { x: 0, y: -force, z: 0 },
-    point: { x: position.x + 0.5, y: position.y, z: position.z },
-  });
-  out.push({
-    force: { x: 0, y: force, z: 0 },
-    point: { x: position.x - 0.5, y: position.y, z: position.z },
-  });
 }

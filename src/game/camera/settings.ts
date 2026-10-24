@@ -91,7 +91,11 @@ export interface CameraSettings {
 export function defaultCameraSettings(): CameraSettings {
   return {
     modeFov: { ...DEFAULT_MODE_FOV },
-    horizonLock: 1,
+    // Partial horizon lock: the camera rolls only ~35% of the boat's heel so
+    // the horizon stays close to level (comfort + a readable skyline) while
+    // still conveying some heel. A full lock (1) rolled the whole scene with
+    // the boat — the tilted-horizon look seen in the first real-browser run.
+    horizonLock: 0.35,
     reducedRoll: false,
     reducedMotionZero: false,
     headMotion: { ...DEFAULT_HEAD_MOTION_CAPS },
