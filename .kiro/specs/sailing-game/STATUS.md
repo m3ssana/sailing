@@ -1,7 +1,7 @@
 # Project status — where to pick up
 
-**Last updated:** 2026-10-24 · **Last commit:** `2b95b01` (HEAD, pushed; working tree has the
-uncommitted Phase-2 physics/render/app work). **CI:** green (`npm run ci` exit 0, 1620 tests, stable
+**Last updated:** 2026-11-11 · **Last commit:** `50ce7de` (HEAD, pushed to `origin/master`; working
+tree clean apart from untracked `.kiro/settings/`). **CI:** green (`npm run ci` exit 0, 1620 tests, stable
 across repeated runs). **Latest work: the RealConditions stream** — the real-wave "1 kt / 50° leeway on
 a reach" defect is FIXED (leeway sway-damping, bounded wave-added resistance, design-draft flotation,
 raised foil stall, completing tacks); the dinghy now sails ≥73–85% of polar on reaches in the REAL
@@ -11,7 +11,7 @@ SCRIPTED autosail helm pinching in the live venue (Stream G crew), not the physi
 
 This file is the resume point. `tasks.md` is the plan; this is the progress against it.
 
-> **WaterBoatLook render-polish pass (2026-10-24, UNCOMMITTED, supersedes the RenderLook summary
+> **WaterBoatLook render-polish pass (2026-10-24, supersedes the RenderLook summary
 > below):** second-browser-run visual defects fixed — (1) **water radial-streak aliasing**: added
 > PER-RING BAND-LIMITING to the Gerstner nodes (`src/render/ocean/SpectrumFallback.ts`
 > `bandLimitWeight` + `spacing` arg on `buildGerstnerPositionNode`/`buildGerstnerNormalNode`), a
@@ -71,7 +71,7 @@ Run `npm run ci` first thing to confirm nothing has drifted.
 
 ## What is built
 
-### Phase 2 task 2.1 — DINGHY boat + factory (boats agent, 2026-10-24, UNCOMMITTED)
+### Phase 2 task 2.1 — DINGHY boat + factory (boats agent, 2026-10-24)
 
 New dir `src/boats/` + `tests/unit/boats/`. The ILCA/Laser single-hander as a
 `BoatDefinition` plus a factory that wires the frozen physics into a runnable sim.
@@ -121,7 +121,7 @@ downwind 160°; capsize in 25 kt sheet-cleated no-hike at **2.6 s**.
   of 6.5 kt at 11 kt) or hold a flat 14 kt downwind gybe — the roll-fragility /
   pointing limit that needs the anticipating AI crew (Stream G).
 
-### HeadingUnify stream (2026-10-24, UNCOMMITTED) — rotation-invariance FIXED (engine-wide heading-convention unification)
+### HeadingUnify stream (2026-10-24) — rotation-invariance FIXED (engine-wide heading-convention unification)
 
 **This supersedes the PhysicsHeading stream's "diagnosed but reverted" writeup
 below.** The two-opposite-handed-frames root cause PhysicsHeading diagnosed is
@@ -202,7 +202,7 @@ symmetry (9), all 12 stability tests incl. the 200 s 30/35/40 kt soaks, the 25 k
 capsize-contrast + 12 kt no-capsize, assist tack/gybe robustness (38), golden
 (re-recorded with documented justification; negative control still binds) — all green.
 
-### RealConditions stream (2026-10-24, UNCOMMITTED) — real-wave sailing fixed; draft fixed; tacks complete
+### RealConditions stream (2026-10-24) — real-wave sailing fixed; draft fixed; tacks complete
 
 **This SUPERSEDES the two "DOCUMENTED, NOT fully met" reductions that used to sit
 here (the dinghy deep-sink revert, and the tack-completion-only-SAFE reduction).
@@ -313,7 +313,7 @@ legs in the live venue, so the live browser run under-performs the polar there a
 can look slow; the completing, speed-holding sail needs the anticipating AI crew
 (Stream G). The PHYSICS (the actual reported bug) is fixed and guarded.
 
-### PhysicsHeading stream (2026-10-24, UNCOMMITTED) — rotation-invariance DIAGNOSED; fix attempted & REVERTED; autosail hook extended
+### PhysicsHeading stream (2026-10-24) — rotation-invariance DIAGNOSED; fix attempted & REVERTED; autosail hook extended
 
 Owns `src/physics`, `src/boats`, `src/game/assist`, `tests/unit/{physics,boats,
 game/assist}`, `src/app/sessionHelpers.ts`, and ONLY the autosail/Scripted call
@@ -407,7 +407,7 @@ stability / sailing / dinghy / assist / app suites all still green.
 heading-convention unification), and therefore item-2 speed and the real-game
 Newport capsize. The characterisation harness is the hand-off.
 
-### Symmetry stream (2026-10-24, UNCOMMITTED) — mirror-symmetry bugs fixed + robust assisted tack
+### Symmetry stream (2026-10-24) — mirror-symmetry bugs fixed + robust assisted tack
 
 Owns `src/physics`, `src/boats`, `src/game/assist`, `tests/unit/{physics,boats,
 game/assist}`, and the `ScriptedInputProvider` autosail script in
@@ -474,7 +474,7 @@ needs the anticipating crew, not a steady helm). Honest reduction, not met.
 
 
 
-### AssistAndSpeed stream (2026-10-24, UNCOMMITTED) — speed gap fixed + SailingAssist (Phase 2 task 2.1 / G.2–G.3)
+### AssistAndSpeed stream (2026-10-24) — speed gap fixed + SailingAssist (Phase 2 task 2.1 / G.2–G.3)
 
 New dir `src/game/assist/` (the SEAM the session agent codes against) + three
 physics fixes in `src/physics` / `src/boats`. Verification:
@@ -660,8 +660,8 @@ run `npm run ci` (per task). `src/types` untouched.
 | C — Physics | ✅ complete | `src/physics/` |
 | D — Generation | ✅ complete (9/9) | `src/generation/`; materials live in `src/render/materials/` (D.8 note below) |
 | E — Ocean rendering | ✅ complete (5/5) | `src/render/ocean/` |
-| **F — Sky, lighting, post** | ✅ **complete (4/4), uncommitted** | `src/render/{sky,weather,post,night,lighting,atmosphere}/` — see "Stream F" below |
-| G — Game systems | 🚧 in progress (1/7) | **G.1 Input & helm feel done** (`src/game/input/`, `src/input/`) — see "Stream G.1" below. G.2–G.5 not started. |
+| **F — Sky, lighting, post** | ✅ **complete (4/4)** | `src/render/{sky,weather,post,night,lighting,atmosphere}/` — see "Stream F" below |
+| G — Game systems | 🚧 in progress | **G.1 Input & helm feel done** (`src/game/input/`, `src/input/`). **Sailing assist done** (`src/game/assist/`: auto-trim, auto-hike, completing tack/gybe; wired into `Session`) — see "AssistAndSpeed" and "RealConditions". **Not started:** the anticipating AI crew (G.2–G.3a), race/start/rules (G.4+), replay. |
 | H — Audio and UI | 🚧 in progress | **H.3 HUD done** (`src/game/hud/` view-models + `src/ui/hud/` React/Zustand). **H.4 Cameras & photo mode done** (`src/game/camera/` pure models + `src/render/camera/` three driver) — see "Stream H.4" below. Audio + other UI not started. `src/input/` exists (G.1). |
 | I — Boat rendering | ✅ complete (2/2) | `src/render/boat/`, `src/render/cloth/` |
 
@@ -743,7 +743,7 @@ assert on the model and build the TSL graph without throwing. Shared contract: `
   `lookAt`); the actual absence of shimmer on a GPU was not observed.
 
 ---
-## Stream G.1 — Input and helm feel (complete 2026-10-24, uncommitted)
+## Stream G.1 — Input and helm feel (complete 2026-10-24)
 
 Architecture: **pure headless models in `src/game/input/` (no DOM, no three) + thin DOM adapters in
 `src/input/`**. The pure models are the engine-agnostic contract; the DOM adapters only shape browser
@@ -798,7 +798,7 @@ type-checker typed those imports as `any`/error. Tests import the DOM layer as *
 ---
 
 
-## Stream H.3 — HUD (complete 2026-10-24, uncommitted)
+## Stream H.3 — HUD (complete 2026-10-24)
 
 Architecture: **pure view-model layer `src/game/hud/` (no React, no three, no DOM) +
 React/Zustand UI in `src/ui/hud/`**. The render loop builds a view model each UI tick
@@ -861,7 +861,7 @@ warnings; `npx tsc --noEmit` → 0 errors in any HUD file (the one remaining rep
 as other unwired streams) — wiring the publisher into the frame loop + `mountHud` into
 `#ui-root` is Phase 2 task 2.1 integration.
 
-## Stream H.4 — Cameras and photo mode (complete 2026-10-24, uncommitted)
+## Stream H.4 — Cameras and photo mode (complete 2026-10-24)
 
 Architecture: **pure camera models in `src/game/camera/` (no three, no DOM) + thin
 three.js driver in `src/render/camera/`**. The pure layer produces a plain-data
@@ -1007,7 +1007,7 @@ NOAA reference at 2023-06-21 16:00 UTC (elev 69.45°, az 148°) rather than inve
 
 ---
 
-## Phase 2 task 2.1 — first sail WIRING (complete 2026-10-24, uncommitted)
+## Phase 2 task 2.1 — first sail WIRING (complete 2026-10-24)
 
 **THE GAME IS PLAYABLE.** `src/app/` now assembles every completed stream into a session that
 launches into Newport in real weather (with the offline fallback ladder) and sails the dinghy with
@@ -1035,7 +1035,6 @@ Files:
   `buildHudInput`, `buildCameraFrame`, `runFixedStep` (the ordering contract), `parseLaunchOptions`
   (`?backend/autosail/offline/speed`), `ScriptedInputProvider` (the autosail sequence: sheet in →
   close-hauled → tack at session-time 20 s), `toAssistLevel`.
-- `src/app/assistStub.ts` — the `createSailingAssist` seam stub (see the seam note below).
 - `src/main.ts` — real bootstrap: renderer (`?backend=webgl` forces WebGL2) → `createSession` → boot
   overlay removed on the first frame → fatal error UI on failure. Shows the WebGL2 fallback notice
   banner (req 7.13, text from `src/ui/strings.ts`) when the backend is WebGL2, and publishes the
@@ -1049,17 +1048,9 @@ existing code):
 - `src/three-env.d.ts` — added the standard three members the minimal ambient decl lacked:
   `Object3D.scale` and `Vector3.setScalar` (purely additive; `src/types/` untouched, file NOT deleted).
 
-### The assist seam — kept on the stub (deliberate)
+### The assist seam — now on the real module
 
-`src/game/assist/index.ts` HAS landed (concurrent agent), but at wiring time its own tests were
-failing (a `he is not defined` crash in `_runManoeuvre`, and an `AssistLevel` export mismatch its
-`closedLoop.test.ts` trips on) and the file is still being actively edited. Switching Session's import
-to it now would make the verified-working first sail depend on another agent's mid-write, crashing
-module. So Session imports `createSailingAssist` from `./assistStub` (same `AssistFrame` /
-`SailingAssist` shape agreed for the seam). **To switch when the real module is green: change the one
-import line at the top of `Session.ts` to `import { createSailingAssist } from '@/game/assist';`
-(and its `AssistFrame`/type import) and delete `src/app/assistStub.ts`.** The stub models a scripted
-tack so the browser smoke test can observe `tackCount ≥ 1`.
+Originally `Session` used a stub (`src/app/assistStub.ts`) while `src/game/assist` was mid-write. That is done: `Session` imports `createSailingAssist` from `@/game/assist` (tack/gybe scripting, auto-trim, auto-hike) and the stub file has been deleted.
 
 ### Verification
 
